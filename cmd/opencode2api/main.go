@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -58,17 +59,28 @@ func main() {
 	}
 	defer manager.Shutdown()
 
+	var webServer *http.Server
+	apiHandler := manager.Handler()
+	if cfg.WebUI.Enabled {
+		admin := adminui.New(manager, monitor, hub, logger)
+		if sameListenPort(cfg.Listen, cfg.WebUI.Listen) {
+			// A single public port is enough for both surfaces: keep the API
+			// routes exact and send every other request to the WebUI. This
+			// also avoids trying to bind the same address twice.
+			apiHandler = combinedHandler(apiHandler, admin.Handler())
+		} else {
+			webServer = &http.Server{
+				Addr: cfg.WebUI.Listen, Handler: admin.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
+			}
+		}
+	}
 	apiServer := &http.Server{
-		Addr: cfg.Listen, Handler: manager.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
+		Addr: cfg.Listen, Handler: apiHandler, ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
 	}
 	servers := []*http.Server{apiServer}
 	go serveHTTP(cancel, logger, apiServer, "api")
 
-	if cfg.WebUI.Enabled {
-		admin := adminui.New(manager, monitor, hub, logger)
-		webServer := &http.Server{
-			Addr: cfg.WebUI.Listen, Handler: admin.Handler(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 120 * time.Second,
-		}
+	if webServer != nil {
 		servers = append(servers, webServer)
 		go serveHTTP(cancel, logger, webServer, "webui")
 	}
@@ -81,6 +93,29 @@ func main() {
 			logger.Error("graceful shutdown failed", "component", "server", "event", "shutdown_failed", "address", server.Addr, "error", err)
 		}
 	}
+}
+
+// sameListenPort reports whether two listener addresses use the same TCP port.
+// Exact matches are accepted even when the address is not in host:port form.
+func sameListenPort(first, second string) bool {
+	if first == second {
+		return true
+	}
+	_, firstPort, firstErr := net.SplitHostPort(first)
+	_, secondPort, secondErr := net.SplitHostPort(second)
+	return firstErr == nil && secondErr == nil && firstPort == secondPort
+}
+
+// combinedHandler exposes the gateway API and the management WebUI on one
+// listener. The gateway owns only /v1 and /healthz, so all other paths fall
+// through to the admin handler and its embedded SPA.
+func combinedHandler(api, webui http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/v1", api)
+	mux.Handle("/v1/", api)
+	mux.Handle("/healthz", api)
+	mux.Handle("/", webui)
+	return mux
 }
 
 // serveHTTP serves server until it is shut down. An unexpected stop is logged
