@@ -401,6 +401,12 @@ textarea {
   justify-content: flex-end;
   gap: var(--sp-2);
   margin-top: var(--sp-5);
+  /* A form long enough to scroll would otherwise push its primary action below
+     the fold; keeping the row pinned makes it reachable without scrolling. */
+  position: sticky;
+  bottom: 0;
+  padding-top: var(--sp-3);
+  background: var(--surface);
 }
 
 .facts {

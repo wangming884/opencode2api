@@ -11,19 +11,24 @@ import (
 
 	"opencode2api/internal/config"
 	"opencode2api/internal/httpx"
+	"opencode2api/internal/limits"
 	"opencode2api/internal/telemetry"
 )
 
 // APIKeyView is a server key as the API keys page lists it: its Fingerprint
 // ID, its name (a numbered placeholder when none is stored), the masked value,
-// whether it is enabled, and its usage.
+// whether it is enabled, its usage, and the policy enforced for it.
 type APIKeyView struct {
-	ID        string      `json:"id"`
-	Name      string      `json:"name"`
-	Display   string      `json:"display"`
-	Enabled   bool        `json:"enabled"`
-	CreatedAt *time.Time  `json:"created_at,omitempty"`
-	Usage     APIKeyUsage `json:"usage"`
+	ID        string                  `json:"id"`
+	Name      string                  `json:"name"`
+	Display   string                  `json:"display"`
+	Enabled   bool                    `json:"enabled"`
+	CreatedAt *time.Time              `json:"created_at,omitempty"`
+	ExpiresAt *time.Time              `json:"expires_at,omitempty"`
+	Expired   bool                    `json:"expired"`
+	Usage     APIKeyUsage             `json:"usage"`
+	Limits    *config.ServerKeyLimits `json:"limits,omitempty"`
+	Today     limits.Snapshot         `json:"today"`
 }
 
 // APIKeyUsage is in-memory like the rest of telemetry.Metrics: it restarts
@@ -46,7 +51,14 @@ func (a *Server) apiKeyViews(cfg config.Config) []APIKeyView {
 		}
 		item := APIKeyView{
 			ID: id, Name: name, Display: config.MaskValue(key), Enabled: !meta.Disabled,
+			ExpiresAt: meta.ExpiresAt, Expired: cfg.ServerKeyExpired(id),
 			Usage: APIKeyUsage{Lifetime: lifetime[id], Window: window[id]},
+		}
+		if meta.Limits != nil {
+			item.Limits = meta.Limits
+		}
+		if limiter := a.manager.Limits(); limiter != nil {
+			item.Today = limiter.Lookup(id)
 		}
 		if !meta.CreatedAt.IsZero() {
 			created := meta.CreatedAt
@@ -70,10 +82,11 @@ func validateKeyName(name string) error {
 	return nil
 }
 
-// addAPIKey appends key as a new server key named name. The name must have
-// 1-80 characters and the key 16-256 characters from [A-Za-z0-9._-]; at most
-// 200 keys are allowed, and a key whose fingerprint already exists is refused.
-func addAPIKey(cfg *config.Config, name, key string) error {
+// addAPIKey appends key as a new server key named name, with an optional
+// traffic policy. The name must have 1-80 characters and the key 16-256
+// characters from [A-Za-z0-9._-]; at most 200 keys are allowed, and a key
+// whose fingerprint already exists is refused.
+func addAPIKey(cfg *config.Config, name, key string, policy *config.ServerKeyLimits, expiresAt *time.Time) error {
 	if err := validateKeyName(name); err != nil {
 		return err
 	}
@@ -98,7 +111,7 @@ func addAPIKey(cfg *config.Config, name, key string) error {
 		cfg.ServerKeyMetadata = map[string]config.ServerKeyMetadata{}
 	}
 	cfg.ServerKeys = append(cfg.ServerKeys, key)
-	cfg.ServerKeyMetadata[id] = config.ServerKeyMetadata{Name: name, CreatedAt: time.Now().UTC()}
+	cfg.ServerKeyMetadata[id] = config.ServerKeyMetadata{Name: name, CreatedAt: time.Now().UTC(), ExpiresAt: expiresAt, Limits: policy}
 	return nil
 }
 
@@ -107,10 +120,17 @@ func addAPIKey(cfg *config.Config, name, key string) error {
 // key next to the updated, masked list.
 func (a *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name  string `json:"name"`
-		Value string `json:"value"`
+		Name      string                  `json:"name"`
+		Value     string                  `json:"value"`
+		Limits    *config.ServerKeyLimits `json:"limits,omitempty"`
+		ExpiresAt string                  `json:"expires_at,omitempty"`
 	}
 	if err := decodeAdminJSON(w, r, &input); err != nil {
+		writeAdminError(w, 400, "invalid_request", err.Error())
+		return
+	}
+	expires, err := parseExpiry(input.ExpiresAt)
+	if err != nil {
 		writeAdminError(w, 400, "invalid_request", err.Error())
 		return
 	}
@@ -123,7 +143,9 @@ func (a *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 		key = "sk-local-" + hex.EncodeToString(random[:])
 	}
-	_, err := a.manager.Update(func(cfg *config.Config) error { return addAPIKey(cfg, strings.TrimSpace(input.Name), key) })
+	_, err = a.manager.Update(func(cfg *config.Config) error {
+		return addAPIKey(cfg, strings.TrimSpace(input.Name), key, input.Limits, expires)
+	})
 	if err != nil {
 		writeAdminError(w, 400, "key_create_failed", a.manager.Redact(err.Error()))
 		return
@@ -132,10 +154,25 @@ func (a *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 201, map[string]any{"key": key, "keys": a.apiKeyViews(a.manager.Config())})
 }
 
-// changeAPIKey renames, enables or disables, or (with remove) deletes the
-// server key whose fingerprint is id. A change that would leave no enabled
+// apiKeyUpdate is one change to a server key. Every field is optional: a nil
+// pointer keeps the stored value, which is what lets the console send only the
+// part it edited.
+type apiKeyUpdate struct {
+	Name    *string
+	Enabled *bool
+	Limits  *config.ServerKeyLimits
+	// ExpiresAt is nil to keep the stored expiry, an empty string to clear it,
+	// or an RFC3339 timestamp to set it.
+	ExpiresAt *string
+	Remove    bool
+}
+
+// changeAPIKey renames, enables or disables, replaces the traffic policy or
+// expiry of, or (with Remove) deletes the server key whose fingerprint is id. A
+// nil policy keeps the stored one; an empty object clears it, since a policy
+// that limits nothing is normalized away. A change that would leave no enabled
 // key is refused.
-func changeAPIKey(cfg *config.Config, id string, name *string, enabled *bool, remove bool) error {
+func changeAPIKey(cfg *config.Config, id string, update apiKeyUpdate) error {
 	index := -1
 	for i, key := range cfg.ServerKeys {
 		if config.Fingerprint(key) == id {
@@ -149,20 +186,30 @@ func changeAPIKey(cfg *config.Config, id string, name *string, enabled *bool, re
 	if cfg.ServerKeyMetadata == nil {
 		cfg.ServerKeyMetadata = map[string]config.ServerKeyMetadata{}
 	}
-	if remove {
+	if update.Remove {
 		cfg.ServerKeys = append(cfg.ServerKeys[:index], cfg.ServerKeys[index+1:]...)
 		delete(cfg.ServerKeyMetadata, id)
 	} else {
 		meta := cfg.ServerKeyMetadata[id]
-		if name != nil {
-			value := strings.TrimSpace(*name)
+		if update.Name != nil {
+			value := strings.TrimSpace(*update.Name)
 			if err := validateKeyName(value); err != nil {
 				return err
 			}
 			meta.Name = value
 		}
-		if enabled != nil {
-			meta.Disabled = !*enabled
+		if update.Enabled != nil {
+			meta.Disabled = !*update.Enabled
+		}
+		if update.Limits != nil {
+			meta.Limits = update.Limits
+		}
+		if update.ExpiresAt != nil {
+			expires, err := parseExpiry(*update.ExpiresAt)
+			if err != nil {
+				return err
+			}
+			meta.ExpiresAt = expires
 		}
 		cfg.ServerKeyMetadata[id] = meta
 	}
@@ -172,17 +219,37 @@ func changeAPIKey(cfg *config.Config, id string, name *string, enabled *bool, re
 	return nil
 }
 
+// parseExpiry reads an expiry field: an empty string clears it, anything else
+// must be RFC3339. The value is stored in UTC so the console and the gateway
+// agree on the instant regardless of the server's zone.
+func parseExpiry(raw string) (*time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, errors.New("到期时间需为 RFC3339 格式，例如 2026-12-31T00:00:00Z")
+	}
+	utc := parsed.UTC()
+	return &utc, nil
+}
+
 func (a *Server) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name    *string `json:"name"`
-		Enabled *bool   `json:"enabled"`
+		Name      *string                 `json:"name"`
+		Enabled   *bool                   `json:"enabled"`
+		Limits    *config.ServerKeyLimits `json:"limits,omitempty"`
+		ExpiresAt *string                 `json:"expires_at,omitempty"`
 	}
 	if err := decodeAdminJSON(w, r, &input); err != nil {
 		writeAdminError(w, 400, "invalid_request", err.Error())
 		return
 	}
 	_, err := a.manager.Update(func(cfg *config.Config) error {
-		return changeAPIKey(cfg, r.PathValue("id"), input.Name, input.Enabled, false)
+		return changeAPIKey(cfg, r.PathValue("id"), apiKeyUpdate{
+			Name: input.Name, Enabled: input.Enabled, Limits: input.Limits, ExpiresAt: input.ExpiresAt,
+		})
 	})
 	if err != nil {
 		writeAdminError(w, 400, "key_update_failed", a.manager.Redact(err.Error()))
@@ -192,7 +259,9 @@ func (a *Server) handleUpdateAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Server) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request) {
-	_, err := a.manager.Update(func(cfg *config.Config) error { return changeAPIKey(cfg, r.PathValue("id"), nil, nil, true) })
+	_, err := a.manager.Update(func(cfg *config.Config) error {
+		return changeAPIKey(cfg, r.PathValue("id"), apiKeyUpdate{Remove: true})
+	})
 	if err != nil {
 		writeAdminError(w, 400, "key_delete_failed", a.manager.Redact(err.Error()))
 		return

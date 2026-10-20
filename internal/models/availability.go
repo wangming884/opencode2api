@@ -125,9 +125,14 @@ func (s *AvailabilityRegistry) SetManual(model string, manual bool, now time.Tim
 	if manual {
 		item.Disabled = false
 		item.Reason = "manually_enabled"
+		// The channel described the last probe, which no longer explains the
+		// current state; keeping it would read as "anonymous / manually
+		// enabled" in the console.
+		item.Channel = ""
 		item.NextCheck = now.Add(FreeModelCheckInterval)
 	} else {
 		item.Reason = "auto_probe"
+		item.Channel = ""
 		item.NextCheck = time.Time{}
 	}
 	s.items[model] = item

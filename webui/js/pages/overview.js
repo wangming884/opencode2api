@@ -1,6 +1,6 @@
 // Page: 概览 — readiness checklist, metrics, resources and token usage.
 import * as store from "../store.js";
-import { $, bindTabs, el, emptyRow, formatNumber, timeOnly } from "../ui.js";
+import { $, bindTabs, el, emptyRow, formatCost, formatNumber, timeOnly } from "../ui.js";
 import { t, onChange } from "../i18n.js";
 
 function renderChecklist() {
@@ -136,6 +136,7 @@ function renderSummary(monitor) {
   $("#m-rate").textContent = `${((metrics.last_hour.success_rate || 0) * 100).toFixed(1)}%`;
   $("#m-p95").textContent = `${metrics.last_hour.p95_ms || 0} ms`;
   $("#m-active").textContent = `${metrics.active_requests || 0} / ${metrics.active_streams || 0}`;
+  $("#m-cost").textContent = formatCost(metrics.lifetime?.cost_usd);
   renderResources(monitor.resources);
   renderBreakdowns(metrics);
 }

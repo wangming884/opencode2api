@@ -107,12 +107,13 @@ func sameListenPort(first, second string) bool {
 }
 
 // combinedHandler exposes the gateway API and the management WebUI on one
-// listener. The gateway owns only /v1 and /healthz, so all other paths fall
-// through to the admin handler and its embedded SPA.
+// listener. The gateway owns /v1, /metrics and /healthz, so all other paths
+// fall through to the admin handler and its embedded SPA.
 func combinedHandler(api, webui http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/v1", api)
 	mux.Handle("/v1/", api)
+	mux.Handle("/metrics", api)
 	mux.Handle("/healthz", api)
 	mux.Handle("/", webui)
 	return mux

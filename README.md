@@ -18,7 +18,11 @@ The executable includes the WebUI. Running the service requires no Node.js runti
 - Configuration hot reload with validation before switching new requests to a replacement gateway.
 - Go subscription quota dashboard with remaining percentages, reset times, and available models.
 - Local API key creation, naming, enabling, disabling, and deletion with immediate updates.
+- Per-key traffic policy: a rolling per-minute request ceiling, a daily request ceiling, a daily token budget, and a model allowlist.
 - Sticky `sota` / `sweet` model groups with ordering, failure fallback, streaming protection, and persisted state.
+- An OpenAI-compatible `/v1/embeddings` relay, optionally pointed at a dedicated OpenAI-compatible origin.
+- An opt-in Prometheus `/metrics` endpoint alongside the JSON monitor.
+- Per-request cost accounting from the catalog's published prices, reported per key and per scrape.
 
 See the [management console guide (Chinese)](docs/management.zh-CN.md) for the new pages and configuration.
 
@@ -117,6 +121,8 @@ Send `Authorization: Bearer YOUR_LOCAL_API_KEY` or `x-api-key: YOUR_LOCAL_API_KE
 | POST   | `/v1/responses`        | Responses.                                                |
 | POST   | `/v1/messages`         | Anthropic Messages.                                       |
 | POST   | `/v1/systemone`        | System One structured decisions.                          |
+| POST   | `/v1/embeddings`       | OpenAI embeddings relay (opt-in).                         |
+| GET    | `/metrics`             | Prometheus exposition (opt-in).                           |
 | GET    | `/healthz`             | Readiness and resource summary.                           |
 
 Discover an available model first:
@@ -173,7 +179,30 @@ System One pairs a free-form state with typed questions and returns typed answer
 
 Requests using the upstream's native protocol retain provider-specific fields. Requests crossing protocols pass through a common representation; not every option has an equivalent. For example, Chat JSON output constraints and `seed` are not forwarded to Anthropic Messages. Unsupported content or tool types may be rejected.
 
-The gateway exposes the routes listed above. It does not implement embeddings, file uploads, image generation, or Responses retrieval and cancellation. It does not store conversation history; clients must supply the history or use features supported by the actual upstream.
+The gateway exposes the routes listed above. It does not implement file uploads, image generation, or Responses retrieval and cancellation. Embeddings are relayed without translation (see [Embeddings and metrics](#embeddings-and-metrics)). It does not store conversation history; clients must supply the history or use features supported by the actual upstream.
+
+### Embeddings and metrics
+
+`/v1/embeddings` is a relay, not a conversion: an OpenAI embeddings request and its reply already share one shape, so the body is forwarded unchanged and the upstream's answer — success or error — is returned as it arrived. Routing, key rotation, tier fallback and telemetry are the gateway's own work.
+
+The endpoint is off until `embeddings.enabled` is true, and it answers 404 while off. Two upstreams are possible:
+
+| `embeddings.base_url` | Behavior                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Unset                 | Forward through the Zen/Go key pools, preferring the configured tier and rotating keys on retryable failures. |
+| Set                   | Forward to that OpenAI-compatible base with `embeddings.api_key`, retrying only on throttling and 5xx.        |
+
+OpenCode Zen does not implement `/v1/embeddings`, so with no `base_url` the relay faithfully returns its 404. Set `base_url` to any OpenAI-compatible origin (OpenAI, SiliconFlow, Ollama, …) to actually produce vectors. The base may be given as `https://host/v1` or `https://host/v1/embeddings`.
+
+The model ID is deliberately not filtered by the model catalog: embedding models are not chat models, and catalog protocol filtering would reject exactly the IDs this endpoint exists to serve. The upstream decides whether a model can embed, and a `stream` flag is rejected outright because OpenAI embeddings are never streamed.
+
+`GET /metrics` publishes the same counters the WebUI monitor reads, in the Prometheus text exposition format, with no client library dependency. It is off until `metrics.enabled` is true. Because the exposition names tiers, upstream keys and traffic, scraping authenticates with a configured `server_keys` entry — every enabled key can read it, so enable it only where that is acceptable. The endpoint lives on the API listener, so it works with the management interface disabled.
+
+Exposed families include `opencode2api_requests_total` (by outcome), `opencode2api_requests_by_endpoint_total`, `opencode2api_requests_by_model_total`, `opencode2api_requests_by_tier_total`, `opencode2api_requests_by_status_total`, `opencode2api_request_duration_seconds` (p50/p95/p99 as upper bucket bounds over the retained hour), `opencode2api_tokens_total` (by type), `opencode2api_cost_usd_total` and `opencode2api_server_key_cost_usd_total` (spend), `opencode2api_server_key_requests_total` and `opencode2api_server_key_tokens_total` (by caller fingerprint), `opencode2api_upstream_attempts_total` plus per-tier/key/channel breakdowns, `opencode2api_models_total`, `opencode2api_models_exposed`, `opencode2api_models_stale`, `opencode2api_upstream_keys`, `opencode2api_upstream_keys_cooling`, and `opencode2api_proxies`.
+
+Spend is priced from the model catalog's per-million prices: uncached input at the input rate, cache reads and writes at their own rates, and output at the output rate. A model the catalog does not price counts as zero rather than an estimate, and when a cache price is missing the cached tokens fall back to the input rate so the total is never understated.
+
+Counters are process-lifetime totals and reset on restart, matching the WebUI monitor.
 
 ## Routing and models
 
@@ -271,6 +300,51 @@ See [config.example.json](config.example.json) for a complete starting configura
 | `reasoning.effort`          | Empty (off); `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `none`. |
 | `reasoning.effort_by_model` | `{}`; per-model overrides of `reasoning.effort`.                            |
 
+#### Per-key limits
+
+`server_key_metadata` maps a key fingerprint to its name, enabled state, and an
+optional `limits` policy. Omitting `limits` leaves the key unlimited.
+
+```json
+{
+  "server_key_metadata": {
+    "0123456789abcdef": {
+      "name": "notes assistant",
+      "expires_at": "2026-12-31T00:00:00Z",
+      "limits": {
+        "rpm": 60,
+        "daily_requests": 2000,
+        "daily_tokens": 5000000,
+        "models": ["glm-*", "claude-opus-5"]
+      }
+    }
+  }
+}
+```
+
+`rpm` and `daily_requests` are refused before routing with a 429 and a
+`Retry-After`, so they never reach the upstream. `daily_tokens` is a budget, not
+a cap: usage is only known once the upstream reports it, so the request that
+crosses the budget still completes and the next one is refused. `models`
+restricts the IDs the key may ask for, with a trailing `*` matching a prefix.
+Only inference endpoints count toward a policy — `/v1/models`, `/healthz`,
+`/metrics`, and Playground traffic do not — and a request refused by the model
+allowlist returns its rate slot, so a client cannot drain its own quota by
+asking for a model it may not use.
+
+Counters follow the UTC day and survive configuration reloads because the
+runtime controller shares one store across gateways. They are also flushed to
+`config.json.limits.json` every 30 seconds and on shutdown, so restarting the
+process does not hand a caller a fresh budget; the rolling minute is not
+persisted, and entries from an earlier UTC day are dropped on load. The WebUI
+API key page edits the same policy and shows today's traffic against it.
+
+`expires_at` is an RFC3339 instant after which the key stops authenticating and
+every request answers 401. It is independent of the enabled switch, so the
+console can tell a key that was switched off from one whose time ran out, and
+the key stays in the configuration so its expiry can be extended instead of
+reissuing a new secret. Omit the field for a key that never expires.
+
 ### Forced thinking level
 
 `reasoning.effort` sets the thinking level used upstream when a request does not
@@ -367,6 +441,10 @@ The per-attempt header timeout is capped by the request timeout. Set it below th
 | `webui.password`              | Bootstrap password with a minimum length of 10.               |
 | `webui.password_hash`         | Generated Argon2id hash; replaces the plaintext password.     |
 | `webui.session_ttl_minutes`   | `720`; range 5–10,080.                                        |
+| `metrics.enabled`             | `false`; exposes `GET /metrics` on the API listener.          |
+| `embeddings.enabled`          | `false`; exposes `POST /v1/embeddings`.                       |
+| `embeddings.base_url`         | Unset; a dedicated OpenAI-compatible origin for embeddings.   |
+| `embeddings.api_key`          | Unset; credential sent to that origin.                        |
 
 On startup, a bootstrap password is hashed and removed from the configuration. The backup containing that bootstrap plaintext is deleted. Keep configuration files and backups private: upstream keys and proxy credentials remain necessary configuration secrets.
 
@@ -385,6 +463,9 @@ The management listener serves the UI and `/api/*` routes. Authentication uses o
 | `POST /api/config/reveal`                        | Reveal configured secrets after password verification.                |
 | `PUT /api/account`                               | Update credentials after password verification; invalidates sessions. |
 | `GET /api/monitor`                               | Request, token, upstream, and resource statistics.                    |
+| `GET /api/metrics`, `PUT /api/metrics`           | Read or switch the Prometheus scrape endpoint.                        |
+| `GET /api/metrics/preview`                       | Render the exposition text for the metrics page.                      |
+| `PUT /api/embeddings`                            | Update the embeddings relay, including its dedicated origin.          |
 | `GET /api/debug/models`                          | Model routes, key fingerprints, and metadata diagnostics.             |
 | `POST /api/debug/inference`                      | Run a Playground request.                                             |
 | `GET /api/logs`, `GET /api/logs/stream`          | Recent logs or a live SSE subscription.                               |

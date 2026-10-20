@@ -119,7 +119,7 @@ func (g *Gateway) probeFreeModel(ctx context.Context, model string) probeResult 
 		}
 	}
 	result := probeResult{reason: "no_probe_channel"}
-	inconclusive := ""
+	inconclusive, inconclusiveChannel := "", ""
 	for _, lane := range lanes {
 		if ctx.Err() != nil {
 			return probeResult{reason: "canceled"}
@@ -159,12 +159,14 @@ func (g *Gateway) probeFreeModel(ctx context.Context, model string) probeResult 
 			return result
 		}
 		if result.reason != "model_unavailable" {
-			inconclusive = result.reason
+			inconclusive, inconclusiveChannel = result.reason, lane.name
 		}
 	}
 	// One lane's auth/transient failure cannot establish global unavailability.
+	// The channel travels with the reason: taking the last lane's channel would
+	// label an earlier lane's failure with a lane that never produced it.
 	if inconclusive != "" {
-		result.reason = inconclusive
+		result.reason, result.channel = inconclusive, inconclusiveChannel
 	}
 	return result
 }
@@ -211,7 +213,20 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 	}
 	reader := io.LimitReader(resp.Body, 1<<20)
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") && protocol != wire.SystemOne {
-		_, err = wire.CollapseStream(reader, protocol, model)
+		var collapsed []byte
+		collapsed, err = wire.CollapseStream(reader, protocol, model)
+		if err == nil {
+			var document map[string]any
+			if json.Unmarshal(collapsed, &document) != nil {
+				err = fmt.Errorf("collapsed stream is not a JSON document")
+			} else if !documentHasOutput(protocol, document) {
+				// A stream that ends immediately with no content — an empty
+				// completion, a filtered reply — collapses cleanly but proves
+				// nothing. Without this check the probe would mark a broken
+				// model available until the next hourly round.
+				err = fmt.Errorf("collapsed stream carried no output")
+			}
+		}
 	} else {
 		var document map[string]any
 		err = json.NewDecoder(reader).Decode(&document)
@@ -227,14 +242,8 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 					err = fmt.Errorf("invalid System One answer")
 				}
 			default:
-				field := "choices"
-				if protocol == wire.Anthropic {
-					field = "content"
-				} else if protocol == wire.Responses {
-					field = "output"
-				}
-				if _, ok := document[field].([]any); !ok {
-					err = fmt.Errorf("invalid response schema")
+				if !documentHasOutput(protocol, document) {
+					err = fmt.Errorf("response carried no output")
 				}
 			}
 		}
@@ -254,6 +263,62 @@ func (g *Gateway) probeAttempt(parent context.Context, client *http.Client, base
 		}
 	}
 	return result
+}
+
+// documentHasOutput reports whether a response document actually carries an
+// answer: assistant text or a tool call. A well-formed but empty reply is not
+// evidence that a model works, so the probe treats it as inconclusive rather
+// than as a success.
+func documentHasOutput(protocol wire.Protocol, document map[string]any) bool {
+	switch protocol {
+	case wire.Anthropic:
+		for _, raw := range jsonutil.SliceAt(document, "content") {
+			block, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
+				return true
+			}
+			if block["type"] == "tool_use" {
+				return true
+			}
+		}
+	case wire.Responses:
+		for _, raw := range jsonutil.SliceAt(document, "output") {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if item["type"] == "function_call" {
+				return true
+			}
+			for _, part := range jsonutil.SliceAt(item, "content") {
+				block, ok := part.(map[string]any)
+				if !ok {
+					continue
+				}
+				if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
+					return true
+				}
+			}
+		}
+	default:
+		for _, raw := range jsonutil.SliceAt(document, "choices") {
+			choice, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			message := jsonutil.MapAt(choice, "message")
+			if text, ok := message["content"].(string); ok && strings.TrimSpace(text) != "" {
+				return true
+			}
+			if len(jsonutil.SliceAt(message, "tool_calls")) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isModelUnavailable reports whether a 400, 404, 410 or 422 error body says

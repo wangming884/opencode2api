@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opencode2api/internal/config"
+	"opencode2api/internal/limits"
 	modelcatalog "opencode2api/internal/models"
 	"opencode2api/internal/protocol"
 	"opencode2api/internal/rotation"
@@ -43,6 +44,8 @@ type ApplyResult struct {
 // free-model availability checks and the listeners bound at startup.
 type RuntimeController struct {
 	rotation           *rotation.Manager
+	limiter            *limits.Manager
+	limitsStore        *limits.Store
 	configPath         string
 	root               context.Context
 	logger             *slog.Logger
@@ -113,6 +116,19 @@ func RuntimeManager(root context.Context, configPath string, cfg config.Config, 
 		return nil, err
 	}
 	manager.rotation = rotationManager
+	manager.limiter = limits.New()
+	// Daily quotas outlive a restart, so a process bounce cannot be used to
+	// reset a caller's budget. The file holds fingerprints and counts only.
+	if configPath != "" {
+		manager.limitsStore = limits.NewStore(configPath + ".limits.json")
+		usage, err := manager.limitsStore.Load()
+		if err != nil {
+			logger.Warn("limits state ignored", "component", "limits", "event", "limits_state_load_failed", "path", configPath+".limits.json", "error", err)
+		} else {
+			manager.limiter.Restore(usage)
+		}
+		go manager.flushLimits(root)
+	}
 	runtime, err := manager.build(cfg)
 	if err != nil {
 		return nil, err
@@ -166,6 +182,11 @@ func (m *RuntimeController) build(cfg config.Config) (*gatewayRuntime, error) {
 		return nil, err
 	}
 	gateway.rotation = m.rotation
+	// Key counters are shared for the same reason as the rotation manager: a
+	// configuration save rebuilds the gateway, and resetting every key's
+	// rolling minute and daily budget on each save would make the limits
+	// meaningless.
+	gateway.limiter = m.limiter
 	availabilityPath := ""
 	if m.configPath != "" {
 		availabilityPath = m.configPath + "." + config.Fingerprint(cfg.Upstream.Zen) + ".availability.json"
@@ -228,6 +249,12 @@ func (m *RuntimeController) Config() config.Config {
 		return config.Config{}
 	}
 	return config.Clone(runtime.config)
+}
+
+// Limits returns the per-key counter store, which the management console reads
+// to show a key's traffic against its policy.
+func (m *RuntimeController) Limits() *limits.Manager {
+	return m.limiter
 }
 
 // RestartStatus returns the listeners the process bound at startup and the
@@ -358,6 +385,40 @@ func (m *RuntimeController) Shutdown() {
 	}
 	if current := m.current.Load(); current != nil {
 		current.cancel()
+	}
+	// The flusher stops with root, so the last counters have to be written
+	// here or a clean shutdown would lose up to one flush interval.
+	m.saveLimits()
+}
+
+// flushLimits writes the key counters periodically while anything changed.
+// Writing on every request would turn a quota check into a disk write; a
+// bounded delay is acceptable because the file only has to survive a restart,
+// not a crash mid-minute.
+func (m *RuntimeController) flushLimits(ctx context.Context) {
+	interval := 30 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if m.limiter.TakeDirty() {
+				m.saveLimits()
+			}
+		}
+	}
+}
+
+// saveLimits persists the daily counters, logging a failure instead of
+// failing the request path that produced them.
+func (m *RuntimeController) saveLimits() {
+	if m.limitsStore == nil || m.limiter == nil {
+		return
+	}
+	if err := m.limitsStore.Save(m.limiter.Export()); err != nil {
+		m.logger.Warn("limits state save failed", "component", "limits", "event", "limits_state_save_failed", "error", err)
 	}
 }
 

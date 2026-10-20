@@ -158,6 +158,12 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 		}
 		if route.Protocol == wire.SystemOne {
 			entry["supported_endpoints"] = []string{"/v1/systemone"}
+		} else if isEmbeddingModel(model) && g.cfg.Embeddings.Enabled {
+			// An embedding model is not a chat model, so advertising the
+			// message endpoints for it would be misleading. The relay accepts
+			// any ID either way; this only shapes discovery. While the relay
+			// is off the endpoint answers 404, so it is not advertised at all.
+			entry["supported_endpoints"] = []string{"/v1/embeddings"}
 		} else {
 			entry["supported_endpoints"] = []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"}
 		}

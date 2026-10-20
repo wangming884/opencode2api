@@ -279,8 +279,6 @@ func classifyKeyTest(status int, attemptOutcome string) string {
 		return "rejected"
 	case status == http.StatusTooManyRequests:
 		return "rate_limited"
-	case status == 0:
-		return "unavailable"
 	case status >= 500:
 		return "upstream_error"
 	default:

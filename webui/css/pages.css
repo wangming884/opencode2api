@@ -42,7 +42,9 @@
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* One row of five: a partial row would leave a grey cell showing through the
+     gap-painted background. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   border: 1px solid var(--border-1);
   border-radius: var(--r-lg);
@@ -336,9 +338,22 @@
   overflow-wrap: anywhere;
 }
 
+/* The Prometheus exposition runs to dozens of lines; it scrolls in place so the
+   embeddings form below it stays reachable. */
+#metrics-preview {
+  max-height: 22rem;
+  overflow: auto;
+}
+
 @media (max-width: 980px) {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Five cards in two columns leave one cell empty; spanning the last card
+     keeps the block solid. */
+  .metrics > .metric:last-child {
+    grid-column: 1 / -1;
   }
 
   .split,

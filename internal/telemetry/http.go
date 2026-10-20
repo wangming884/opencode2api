@@ -47,9 +47,12 @@ type RequestMeta struct {
 	// "reAd" or "read_file") when the v1 lane's shaper renamed it to "read"
 	// on the outbound wire. When non-empty, "read" tool calls in the
 	// upstream response are rewritten back to ToolAlias before returning.
-	ToolAlias      string
-	Usage          protocol.Usage
-	UsageReported  bool
+	ToolAlias     string
+	Usage         protocol.Usage
+	UsageReported bool
+	// CostUSD is the spend this request produced, priced from the catalog.
+	// Zero when the model has no published price.
+	CostUSD        float64
 	AttemptOutcome string
 	Outcome        string
 }
@@ -112,11 +115,12 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // Middleware counts active requests and attaches a RequestMeta to every
 // request, reusing one that is already present. When the handler returns it
 // records the request in monitor and logs it: at info level when it was routed
-// to an upstream channel, and always at debug level. /healthz bypasses all of
-// it.
+// to an upstream channel, and always at debug level. /healthz and /metrics
+// bypass all of it: they are operator probes, and counting a scrape every few
+// seconds would inflate the very totals it reports.
 func Middleware(monitor *Metrics, logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}

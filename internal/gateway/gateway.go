@@ -22,12 +22,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"opencode2api/internal/config"
 	"opencode2api/internal/identity"
 	"opencode2api/internal/jsonutil"
+	"opencode2api/internal/limits"
 	"opencode2api/internal/models"
 	wire "opencode2api/internal/protocol"
 	"opencode2api/internal/rotation"
@@ -68,7 +70,11 @@ const proxyUnavailableMessage = "all proxies are unavailable; the upstream could
 // config; applying a new config builds a new Gateway (see RuntimeController)
 // instead of mutating this one.
 type Gateway struct {
-	rotation     *rotation.Manager
+	rotation *rotation.Manager
+	// limiter holds the per-server-key counters. It is shared with every other
+	// gateway built from the same runtime controller, so applying a
+	// configuration does not hand each key a fresh quota.
+	limiter      *limits.Manager
 	cfg          config.Config
 	logger       *slog.Logger
 	transports   *proxyTransports
@@ -115,6 +121,7 @@ func New(cfg config.Config, logger *slog.Logger, monitor *telemetry.Metrics) (*G
 	return &Gateway{
 		cfg:            cfg,
 		rotation:       rotationManager,
+		limiter:        limits.New(),
 		logger:         logger,
 		transports:     transports,
 		zenNodes:       zenNodes,
@@ -136,6 +143,8 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/responses", g.authenticate(g.handleInference(wire.Responses)))
 	mux.HandleFunc("POST /v1/messages", g.authenticate(g.handleInference(wire.Anthropic)))
 	mux.HandleFunc("POST /v1/systemone", g.authenticate(g.handleSystemOne))
+	mux.HandleFunc("POST /v1/embeddings", g.authenticate(g.handleEmbeddings))
+	mux.HandleFunc("GET /metrics", g.authenticate(g.handleMetrics))
 	mux.HandleFunc("GET /healthz", g.handleHealth)
 	return telemetry.Recover(g.logger, mux)
 }
@@ -162,11 +171,7 @@ func (g *Gateway) authenticate(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		if matched == "" {
-			protocol := wire.Chat
-			if r.URL.Path == "/v1/messages" {
-				protocol = wire.Anthropic
-			}
-			wire.WriteError(w, protocol, http.StatusUnauthorized, "invalid local API key", "authentication_error", "")
+			wire.WriteError(w, requestProtocol(r.URL.Path), http.StatusUnauthorized, "invalid local API key", "authentication_error", "")
 			return
 		}
 		// The Playground borrows the first enabled key to pass this check, so
@@ -174,12 +179,117 @@ func (g *Gateway) authenticate(next http.HandlerFunc) http.HandlerFunc {
 		caller := config.Fingerprint(matched)
 		if isDiagnosticRequest(r.Context()) {
 			caller = telemetry.PlaygroundServerKey
+		} else if g.cfg.ServerKeyExpired(caller) {
+			// Expiry is checked here rather than in the match loop so the
+			// caller is told the key ran out instead of that it is unknown.
+			wire.WriteError(w, requestProtocol(r.URL.Path), http.StatusUnauthorized, "this API key has expired", "authentication_error", "")
+			return
+		}
+		// Only inference is metered: discovery, health and metrics probes are
+		// not part of a key's traffic budget.
+		if meteredPath(r.URL.Path) {
+			decision := g.limiter.Allow(caller, g.cfg.ServerKeyLimitsOf(caller))
+			if !decision.Allowed {
+				g.logger.Debug("request refused by key policy", "component", "limits", "event", "key_limited", "path", r.URL.Path, "server_key_id", caller, "reason", decision.Reason, "retry_after", decision.RetryAfter)
+				w.Header().Set("Retry-After", strconv.Itoa(decision.RetryAfter))
+				wire.WriteError(w, requestProtocol(r.URL.Path), http.StatusTooManyRequests, decision.Message, "rate_limit_exceeded", "")
+				return
+			}
 		}
 		if meta := telemetry.MetaFromRequest(r); meta != nil {
 			meta.ServerKeyID = caller
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), callerContextKey{}, caller)))
 	}
+}
+
+// requestProtocol names the wire protocol of a client path so an error is
+// shaped for the endpoint that produced it.
+func requestProtocol(path string) wire.Protocol {
+	if path == "/v1/messages" {
+		return wire.Anthropic
+	}
+	return wire.Chat
+}
+
+// meteredPath reports whether a path counts toward a key's traffic policy.
+func meteredPath(path string) bool {
+	switch path {
+	case "/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1/embeddings":
+		return true
+	}
+	return false
+}
+
+// finishRequest charges a finished request to its key's daily budget and prices
+// it. It runs on the way out, so a streaming call is accounted once its last
+// event arrived and meta carries the reported usage.
+func (g *Gateway) finishRequest(r *http.Request) {
+	meta := telemetry.MetaFromRequest(r)
+	if meta == nil || !meta.UsageReported {
+		return
+	}
+	tokens := int64(meta.Usage.Total)
+	if tokens <= 0 {
+		tokens = int64(meta.Usage.Input + meta.Usage.Output)
+	}
+	caller := callerScope(r.Context())
+	if g.limiter != nil && caller != "" && caller != telemetry.PlaygroundServerKey {
+		g.limiter.RecordUsage(caller, tokens)
+	}
+	meta.CostUSD = g.requestCost(meta.Model, meta.Tier, meta.Usage)
+}
+
+// requestCost prices one request from the catalog's per-million prices. A model
+// without a published price costs zero rather than a guess.
+func (g *Gateway) requestCost(model, tier string, usage wire.Usage) float64 {
+	if g.catalog == nil || model == "" {
+		return 0
+	}
+	// A channel label such as "external" is not a tier the catalog prices
+	// against, so it falls back to the preferred tier: a model that is priced
+	// at all is priced the same everywhere, and the alternative would be
+	// reporting zero for every embeddings request.
+	tierName := config.Tier(tier)
+	if tierName != config.TierZen && tierName != config.TierGo {
+		tierName = g.cfg.Prefer
+	}
+	return priceUsage(g.catalog.MetadataForTier(model, tierName).Cost, usage)
+}
+
+// priceUsage converts token counts to dollars. The input count already includes
+// cache reads and writes, so those are priced at their own rate and only the
+// remainder at the input rate; charging the whole input at the input rate would
+// overstate the cost of a cached conversation by an order of magnitude.
+//
+// When the catalog publishes no cache price but the upstream still reports
+// cached tokens, they fall back to the input rate: a cache discount is unknown,
+// and pricing them at zero would silently understate the bill.
+func priceUsage(cost *models.Cost, usage wire.Usage) float64 {
+	if cost == nil {
+		return 0
+	}
+	perMillion := func(price *float64, tokens int) float64 {
+		if price == nil || tokens <= 0 {
+			return 0
+		}
+		return *price * float64(tokens) / 1e6
+	}
+	cacheRead, cacheWrite := cost.CacheRead, cost.CacheWrite
+	if cacheRead == nil {
+		cacheRead = cost.Input
+	}
+	if cacheWrite == nil {
+		cacheWrite = cost.Input
+	}
+	uncached := usage.Input - usage.Cached - usage.CacheCreation
+	if uncached < 0 {
+		uncached = 0
+	}
+	return perMillion(cost.Input, uncached) +
+		perMillion(cacheRead, usage.Cached) +
+		perMillion(cacheWrite, usage.CacheCreation) +
+		perMillion(cost.Output, usage.Output)
 }
 
 type callerContextKey struct{}
@@ -236,8 +346,19 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 		if meta != nil {
 			meta.Model = model
 		}
+		// The budget is charged once the answer is known, so this runs on the
+		// way out, after a stream has finished and meta carries its usage.
+		defer g.finishRequest(r)
 		if model == "" {
 			wire.WriteError(w, external, http.StatusBadRequest, "model is required", "invalid_request_error", "model")
+			return
+		}
+		if !g.cfg.ServerKeyAllowsModel(callerScope(r.Context()), model) {
+			// The key policy refused this model, not the caller's payload, so
+			// the request gives its rate slot back instead of spending the
+			// quota on requests that can never succeed.
+			g.limiter.Release(callerScope(r.Context()))
+			wire.WriteError(w, external, http.StatusForbidden, fmt.Sprintf("model %q is not allowed for this API key", model), "permission_error", "model")
 			return
 		}
 		if id := g.rotation.GroupID(model); id != "" {

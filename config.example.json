@@ -35,6 +35,20 @@
     "ring_size": 2000,
     "dump_request_bodies": false
   },
+  // Prometheus scrape endpoint at GET /metrics. Off by default: the
+  // exposition names tiers, upstream keys and traffic, and any enabled
+  // server_key can read it.
+  "metrics": {
+    "enabled": false
+  },
+  // OpenAI-compatible embeddings relay at POST /v1/embeddings. OpenCode Zen
+  // does not serve embeddings, so set base_url to an OpenAI-compatible origin
+  // to produce vectors; leaving it empty relays to the Zen/Go pools.
+  "embeddings": {
+    "enabled": false,
+    "base_url": "",
+    "api_key": ""
+  },
   "webui": {
     "enabled": true,
     "listen": "0.0.0.0:8081",

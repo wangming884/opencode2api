@@ -18,7 +18,11 @@ WebUI 内嵌在可执行文件中，运行服务无需 Node.js 或数据库。
 - 配置热重载：先验证新配置，再切换新请求使用的 Gateway。
 - Go 共享套餐额度看板，显示剩余百分比、重置时间和可用模型。
 - API Key 生成、自定义、命名、启停和删除，变更立即生效。
+- 按 Key 的流量策略：滚动每分钟请求上限、每日请求上限、每日 token 额度与模型白名单。
 - `sota` / `sweet` 分组别名，支持模型排序、故障切换、流式输出保护和状态恢复。
+- OpenAI 兼容的 `/v1/embeddings` 中继，可指向独立的 OpenAI 兼容上游。
+- 可选的 Prometheus `/metrics` 端点，与 JSON 监控并存。
+- 按目录公布的价格逐请求核算花费，按 Key 与抓取端点分别输出。
 
 新增页面及调用示例见[管理控制台说明](docs/management.zh-CN.md)。
 
@@ -117,6 +121,8 @@ docker run -d --name opencode2api \
 | POST | `/v1/responses`        | Responses。                |
 | POST | `/v1/messages`         | Anthropic Messages。       |
 | POST | `/v1/systemone`        | System One 结构化决策。    |
+| POST | `/v1/embeddings`       | OpenAI embeddings 中继（需开启）。 |
+| GET  | `/metrics`             | Prometheus 指标暴露（需开启）。 |
 | GET  | `/healthz`             | 就绪状态与资源汇总。       |
 
 先获取可用模型：
@@ -173,7 +179,30 @@ System One 将自由文本状态与类型化问题配对，并返回类型化答
 
 客户端协议与上游原生协议相同时，会保留供应商特有字段。跨协议请求经过统一中间结构转换，部分参数没有等价表达。例如，Chat 的 JSON 输出约束与 `seed` 不会被转发到 Anthropic Messages。不支持的内容块或工具类型可能被拒绝。
 
-网关仅实现上表中的接口，不提供 embeddings、文件上传、图像生成、Responses 查询或取消接口。网关不保存会话历史；客户端需要提交历史，或使用实际上游支持的相关能力。
+网关仅实现上表中的接口，不提供文件上传、图像生成、Responses 查询或取消接口。embeddings 只做中继、不做转换（见[embeddings 与指标](#embeddings-与指标)）。网关不保存会话历史；客户端需要提交历史，或使用实际上游支持的相关能力。
+
+### embeddings 与指标
+
+`/v1/embeddings` 是中继而非转换：OpenAI 的 embeddings 请求与响应本身结构一致，因此请求体原样转发，上游的答复（无论成功还是错误）原样返回。路由、Key 轮换、层级回退和统计由网关负责。
+
+该端点默认关闭，`embeddings.enabled` 为 true 才生效，关闭时返回 404。上游有两种选择：
+
+| `embeddings.base_url` | 行为                                                                                    |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| 未设置                | 走 Zen / Go Key 池，优先使用配置的层级，可重试的失败会轮换 Key。                         |
+| 已设置                | 转发到该 OpenAI 兼容地址并使用 `embeddings.api_key`，仅在限流和 5xx 时重试。             |
+
+OpenCode Zen 本身没有 `/v1/embeddings`，因此不配置 `base_url` 时中继会如实返回它的 404。填入任意 OpenAI 兼容地址（OpenAI、SiliconFlow、Ollama 等）才能真正生成向量。地址可写成 `https://host/v1` 或 `https://host/v1/embeddings`。
+
+模型 ID 有意不经过模型目录过滤：embedding 模型不是聊天模型，目录的协议过滤恰好会拒掉这个端点要服务的 ID。模型能否生成向量由上游判断；`stream` 参数会被直接拒绝，因为 OpenAI embeddings 从不流式返回。
+
+`GET /metrics` 以 Prometheus 文本格式暴露与 WebUI 监控相同的计数，且不依赖任何客户端库。默认关闭，`metrics.enabled` 为 true 才生效。由于暴露内容包含层级、上游 Key 与流量信息，抓取需要用已配置的 `server_keys` 认证——所有启用的 Key 都能读取，请只在可接受的环境中开启。该端点挂在 API 监听端口上，因此管理界面关闭时依然可用。
+
+暴露的指标包括：`opencode2api_requests_total`（按结果）、`opencode2api_requests_by_endpoint_total`、`opencode2api_requests_by_model_total`、`opencode2api_requests_by_tier_total`、`opencode2api_requests_by_status_total`、`opencode2api_request_duration_seconds`（p50/p95/p99，保留小时窗口的分桶上界）、`opencode2api_tokens_total`（按类型）、`opencode2api_cost_usd_total` 与 `opencode2api_server_key_cost_usd_total`（花费）、`opencode2api_server_key_requests_total` 与 `opencode2api_server_key_tokens_total`（按调用方指纹）、`opencode2api_upstream_attempts_total` 及按层级/Key/通道的细分、`opencode2api_models_total`、`opencode2api_models_exposed`、`opencode2api_models_stale`、`opencode2api_upstream_keys`、`opencode2api_upstream_keys_cooling`、`opencode2api_proxies`。
+
+花费按模型目录公布的每百万 token 价格计算：未命中缓存的输入按输入价、缓存读取与写入按各自价格、输出按输出价。目录未公布价格的模型记为 0 而不是估算；缺少缓存价格时，缓存 token 回退按输入价计算，避免总额被低估。
+
+计数为进程生命周期累计值，重启后归零，与 WebUI 监控一致。
 
 ## 路由与模型
 
@@ -271,6 +300,44 @@ Key 初始化时均衡分配到代理。真实流量可以触发代理检查、K
 | `reasoning.effort`          | 空（关闭）；可选 `auto`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`none`。 |
 | `reasoning.effort_by_model` | `{}`；按模型 ID 覆盖 `reasoning.effort`。                                             |
 
+#### 按 Key 限流与配额
+
+`server_key_metadata` 以 Key 指纹为键，保存名称、启用状态和可选的 `limits` 策略。
+省略 `limits` 表示该 Key 不限。
+
+```json
+{
+  "server_key_metadata": {
+    "0123456789abcdef": {
+      "name": "笔记助手",
+      "expires_at": "2026-12-31T00:00:00Z",
+      "limits": {
+        "rpm": 60,
+        "daily_requests": 2000,
+        "daily_tokens": 5000000,
+        "models": ["glm-*", "claude-opus-5"]
+      }
+    }
+  }
+}
+```
+
+`rpm` 与 `daily_requests` 在路由前拒绝，返回 429 与 `Retry-After`，不会触达上游。
+`daily_tokens` 是预算而非硬上限：用量只有上游上报后才知道，因此跨过额度的那次请求仍会
+完成，之后的请求被拒绝。`models` 限制该 Key 可请求的模型 ID，末尾的 `*` 按前缀匹配。
+只有推理端点计入策略——`/v1/models`、`/healthz`、`/metrics` 与 Playground 流量不计入——
+且因模型白名单被拒绝的请求会退还它占用的速率额度，客户端不会因为反复请求无权模型而把
+自己的配额耗光。
+
+计数按 UTC 自然日滚动，并因运行时控制器共享同一个存储而在配置热重载后保留。计数还会每 30 秒
+以及在关闭时写入 `config.json.limits.json`，因此重启进程不会给调用方一份全新的额度；滚动分钟
+窗口不落盘，载入时来自更早 UTC 日的记录会被丢弃。WebUI 的 API Key 页面编辑同一份策略，并显示
+今日流量与限额的对照。
+
+`expires_at` 是一个 RFC3339 时刻，到点后该 Key 停止认证，所有请求返回 401。它与启停开关相互
+独立，因此控制台能区分「被停用」和「已到期」；Key 仍保留在配置中，可以延长有效期而不必重新
+签发。省略该字段表示永不过期。
+
 ### 强制思考强度
 
 `reasoning.effort` 在请求自身没有指定思考强度时，指定发往上游的强度；
@@ -362,6 +429,10 @@ pool+http://127.0.0.1:7891
 | `webui.password`              | 首次初始化密码，最小长度为 10。                 |
 | `webui.password_hash`         | 自动生成的 Argon2id 哈希，用于替代明文密码。    |
 | `webui.session_ttl_minutes`   | `720`；范围为 5–10,080。                        |
+| `metrics.enabled`             | `false`；在 API 端口暴露 `GET /metrics`。       |
+| `embeddings.enabled`          | `false`；暴露 `POST /v1/embeddings`。           |
+| `embeddings.base_url`         | 未设置；embeddings 专用的 OpenAI 兼容上游地址。 |
+| `embeddings.api_key`          | 未设置；发送给该上游的凭证。                    |
 
 启动时会将初始密码哈希化，并从配置中删除明文；包含初始明文密码的备份也会删除。配置和备份仍包含运行所需的上游 Key、代理凭据，应限制文件访问权限。
 
@@ -380,6 +451,9 @@ pool+http://127.0.0.1:7891
 | `POST /api/config/reveal`                        | 验证密码后查看配置中的敏感值。                  |
 | `PUT /api/account`                               | 验证密码后修改账号，修改后使已有 Session 失效。 |
 | `GET /api/monitor`                               | 请求、Token、上游和资源统计。                   |
+| `GET /api/metrics`、`PUT /api/metrics`           | 读取或开关 Prometheus 抓取端点。                |
+| `GET /api/metrics/preview`                       | 渲染指标页展示的暴露文本。                      |
+| `PUT /api/embeddings`                            | 更新 embeddings 中继，包括独立上游地址。        |
 | `GET /api/debug/models`                          | 模型路由、Key 指纹和 metadata 诊断。            |
 | `POST /api/debug/inference`                      | 执行 Playground 请求。                          |
 | `GET /api/logs`、`GET /api/logs/stream`          | 最近日志或 SSE 实时订阅。                       |

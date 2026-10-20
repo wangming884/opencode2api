@@ -59,6 +59,7 @@
           </div>
           <div class="nav-group">
             <div class="nav-group-title" data-i18n="nav.group.system">系统</div>
+            <button class="nav-item" data-page="metrics" data-i18n="nav.metrics">监控指标</button>
             <button class="nav-item" data-page="config" data-i18n="nav.config">配置中心</button>
             <button class="nav-item" data-page="account" data-i18n="nav.account">账号安全</button>
           </div>
@@ -125,6 +126,11 @@
                   <div class="metric-label" data-i18n="overview.active">活跃 / 流式</div>
                   <div id="m-active" class="metric-value">—</div>
                   <div class="metric-note" data-i18n="overview.concurrent">当前并发</div>
+                </div>
+                <div class="metric">
+                  <div class="metric-label" data-i18n="overview.cost">累计花费</div>
+                  <div id="m-cost" class="metric-value">—</div>
+                  <div class="metric-note" data-i18n="overview.costNote">按目录价估算</div>
                 </div>
               </div>
               <div class="split">
@@ -574,6 +580,7 @@
                       <th data-i18n="apikeys.col.tail">密钥尾码</th>
                       <th data-i18n="apikeys.col.state">状态</th>
                       <th data-i18n="apikeys.col.usage">用量（近 1 小时 / 累计）</th>
+                      <th data-i18n="apikeys.col.limits">今日 / 限额</th>
                       <th data-i18n="apikeys.col.created">创建时间</th>
                       <th data-i18n="apikeys.col.action">操作</th>
                     </tr>
@@ -582,7 +589,9 @@
                 </table>
               </div>
               <p class="section-caption" data-i18n="apikeys.note">
-                停用和删除会使对应应用的新请求返回 401。至少保留一个启用的 Key。
+                停用和删除会使对应应用的新请求返回 401。至少保留一个启用的 Key。限额按 Key 生效：每分钟请求与每日请求在路由前拒绝，每日
+                token 在超出后拒绝后续请求；计数按 UTC 自然日，写入磁盘，重启后继续累计，跨日归零。到期时间到点后该 Key
+                立即停止认证。
               </p>
             </section>
           </section>
@@ -743,6 +752,131 @@
                   <tbody id="rotation-attempts"></tbody>
                 </table>
               </div>
+            </section>
+          </section>
+
+          <section id="page-metrics" class="page hidden">
+            <section class="section">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title" data-i18n="metrics.title">Prometheus 指标</h2>
+                  <p class="section-caption" data-i18n="metrics.caption">
+                    把请求、token、上游尝试与池健康度暴露给标准抓取器，可直接接入 Prometheus 与 Grafana。
+                  </p>
+                </div>
+                <div class="key-actions">
+                  <button id="metrics-toggle" class="btn btn-sm" data-i18n="metrics.enable">启用</button>
+                  <button id="metrics-refresh" class="btn btn-sm btn-ghost" data-i18n="metrics.refresh">
+                    刷新
+                  </button>
+                </div>
+              </div>
+              <p id="metrics-status" class="section-caption" role="status"></p>
+              <div class="code-card">
+                <div class="code-head">
+                  <span data-i18n="metrics.url">抓取地址</span>
+                  <button
+                    id="metrics-copy-url"
+                    type="button"
+                    class="btn btn-sm btn-ghost"
+                    data-i18n="common.copy"
+                  >
+                    复制
+                  </button>
+                </div>
+                <pre id="metrics-url">—</pre>
+              </div>
+              <p class="section-caption" data-i18n="metrics.auth">
+                抓取需要本地 API Key：Authorization: Bearer &lt;server_key&gt;。启用后任何已启用的 Key
+                都能读取，请只在可信网络中开放。
+              </p>
+            </section>
+            <section class="section">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title" data-i18n="metrics.preview.title">实时输出预览</h2>
+                  <p class="section-caption" data-i18n="metrics.preview.caption">
+                    与抓取器收到的内容一致，仅登录后可查看；抓取端点未启用时仍可预览。
+                  </p>
+                </div>
+                <button
+                  id="metrics-copy-preview"
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  data-i18n="common.copy"
+                >
+                  复制
+                </button>
+              </div>
+              <div class="code-card">
+                <div class="code-head">
+                  <span data-i18n="metrics.preview.output">暴露文本</span>
+                  <span id="metrics-preview-size"></span>
+                </div>
+                <pre id="metrics-preview">—</pre>
+              </div>
+            </section>
+            <section class="section">
+              <div class="section-head">
+                <div>
+                  <h2 class="section-title" data-i18n="metrics.embeddings.title">Embeddings 接入</h2>
+                  <p class="section-caption" data-i18n="metrics.embeddings.caption">
+                    OpenAI 兼容的 /v1/embeddings 中继：请求与响应均按 OpenAI 结构原样转发，支持层级回退与
+                    Key 轮换，不做协议转换。
+                  </p>
+                </div>
+                <button
+                  id="metrics-copy-embeddings"
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  data-i18n="common.copy"
+                >
+                  复制
+                </button>
+              </div>
+              <p id="embeddings-status" class="section-caption" role="status"></p>
+              <form id="embeddings-form" class="stack">
+                <div class="field">
+                  <label class="check">
+                    <input id="embeddings-enabled" type="checkbox" />
+                    <span data-i18n="metrics.embeddings.enable">启用 /v1/embeddings</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="embeddings-base" data-i18n="metrics.embeddings.base">
+                    独立上游地址（留空则走 Zen / Go 池）
+                  </label>
+                  <input
+                    id="embeddings-base"
+                    type="text"
+                    placeholder="https://api.openai.com/v1"
+                    autocomplete="off"
+                  />
+                  <p class="section-caption" data-i18n="metrics.embeddings.baseNote">
+                    OpenCode Zen 本身没有 embeddings 端点，留空时请求会原样转发并返回上游的 404。填入任意
+                    OpenAI 兼容地址（OpenAI、SiliconFlow、Ollama 等）才能真正生成向量。
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="embeddings-key" data-i18n="metrics.embeddings.key">上游 API Key</label>
+                  <input id="embeddings-key" type="password" autocomplete="new-password" />
+                  <p id="embeddings-key-hint" class="section-caption"></p>
+                </div>
+                <div class="actions">
+                  <button id="embeddings-save" type="submit" class="btn btn-sm btn-primary" data-i18n="metrics.embeddings.save">
+                    保存 embeddings 设置
+                  </button>
+                </div>
+              </form>
+              <div class="code-card">
+                <div class="code-head">
+                  <span data-i18n="metrics.embeddings.example">调用示例</span>
+                </div>
+                <pre id="metrics-embeddings"></pre>
+              </div>
+              <p class="section-caption" data-i18n="metrics.embeddings.note">
+                模型 ID 不经过模型目录过滤，由上游判断是否支持；上游的拒绝会原样返回。流式参数会被直接拒绝。
+              </p>
             </section>
           </section>
 

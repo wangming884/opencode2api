@@ -17,6 +17,7 @@ type metricBucket struct {
 	success       uint64
 	errors        uint64
 	duration      uint64
+	cost          float64
 	histogram     [11]uint64
 	endpoints     map[string]uint64
 	models        map[string]uint64
@@ -57,6 +58,7 @@ type UsagePeriod struct {
 	Requests uint64                 `json:"requests"`
 	Reported uint64                 `json:"reported"`
 	Coverage float64                `json:"coverage"`
+	Cost     float64                `json:"cost_usd"`
 	Tokens   TokenCounts            `json:"tokens"`
 	Models   map[string]TokenCounts `json:"models"`
 	Tiers    map[string]TokenCounts `json:"tiers"`
@@ -72,6 +74,9 @@ type UsagePeriod struct {
 // ServerKeyUsage is the request count and token usage of one server key.
 type ServerKeyUsage struct {
 	Requests uint64 `json:"requests"`
+	// Cost is the spend this key produced, in USD, using the catalog's
+	// per-million prices. Zero when the model has no published price.
+	Cost float64 `json:"cost_usd"`
 	TokenCounts
 }
 
@@ -286,6 +291,7 @@ type Metrics struct {
 	mu              sync.Mutex
 	buckets         [60]metricBucket
 	lifetimeUsage   UsagePeriod
+	lifetimeCost    float64
 	sessionSeen     map[string]int64
 	attemptLifetime AttemptAggregate
 	attemptBuckets  [60]attemptBucket
@@ -341,6 +347,9 @@ func (m *Metrics) Record(endpoint string, status int, duration time.Duration, me
 	}
 	milliseconds := uint64(max(duration.Milliseconds(), 0))
 	bucket.duration += milliseconds
+	bucket.cost += meta.CostUSD
+	m.lifetimeCost += meta.CostUSD
+	m.lifetimeUsage.Cost += meta.CostUSD
 	index := len(latencyBounds)
 	for i, bound := range latencyBounds {
 		if milliseconds <= bound {
@@ -372,8 +381,8 @@ func (m *Metrics) Record(endpoint string, status int, duration time.Duration, me
 			addTokenMap(m.lifetimeUsage.Tiers, meta.Tier, tokens)
 			addTokenMap(bucket.usageSessions, meta.Session, tokens)
 			m.addLifetimeSessionLocked(meta.Session, tokens)
-			addServerKeyUsage(bucket.usageKeys, meta.ServerKeyID, ServerKeyUsage{Requests: 1, TokenCounts: tokens})
-			addServerKeyUsage(m.lifetimeUsage.ServerKeys, meta.ServerKeyID, ServerKeyUsage{Requests: 1, TokenCounts: tokens})
+			addServerKeyUsage(bucket.usageKeys, meta.ServerKeyID, ServerKeyUsage{Requests: 1, TokenCounts: tokens, Cost: meta.CostUSD})
+			addServerKeyUsage(m.lifetimeUsage.ServerKeys, meta.ServerKeyID, ServerKeyUsage{Requests: 1, TokenCounts: tokens, Cost: meta.CostUSD})
 		}
 		if meta.Request != "" && meta.Model != "" {
 			request := UpstreamRequest{
@@ -474,6 +483,7 @@ type MetricSummary struct {
 	Success     uint64  `json:"success"`
 	Errors      uint64  `json:"errors"`
 	SuccessRate float64 `json:"success_rate"`
+	CostUSD     float64 `json:"cost_usd"`
 	AverageMS   float64 `json:"average_ms,omitempty"`
 	P50MS       uint64  `json:"p50_ms,omitempty"`
 	P95MS       uint64  `json:"p95_ms,omitempty"`
@@ -540,6 +550,7 @@ func (m *Metrics) Snapshot() MonitorSnapshot {
 			window.Total += bucket.total
 			window.Success += bucket.success
 			window.Errors += bucket.errors
+			window.CostUSD += bucket.cost
 			window.AverageMS += float64(bucket.duration)
 			for i := range histogram {
 				histogram[i] += bucket.histogram[i]
@@ -550,6 +561,7 @@ func (m *Metrics) Snapshot() MonitorSnapshot {
 			mergeCounts(statuses, bucket.statuses)
 			usageWindow.Requests += bucket.usageRequests
 			usageWindow.Reported += bucket.usageReported
+			usageWindow.Cost += bucket.cost
 			addTokenCounts(&usageWindow.Tokens, bucket.tokens)
 			mergeTokenMaps(usageWindow.Models, bucket.usageModels)
 			mergeTokenMaps(usageWindow.Tiers, bucket.usageTiers)
@@ -583,7 +595,7 @@ func (m *Metrics) Snapshot() MonitorSnapshot {
 		window.P95MS = histogramPercentile(histogram, window.Total, 0.95)
 		window.P99MS = histogramPercentile(histogram, window.Total, 0.99)
 	}
-	lifetime := MetricSummary{Total: m.total.Load(), Success: m.success.Load(), Errors: m.errors.Load()}
+	lifetime := MetricSummary{Total: m.total.Load(), Success: m.success.Load(), Errors: m.errors.Load(), CostUSD: m.lifetimeCost}
 	if lifetime.Total > 0 {
 		lifetime.SuccessRate = float64(lifetime.Success) / float64(lifetime.Total)
 	}
@@ -637,6 +649,7 @@ func addServerKeyUsage(target map[string]ServerKeyUsage, key string, value Serve
 	}
 	current := target[key]
 	current.Requests += value.Requests
+	current.Cost += value.Cost
 	addTokenCounts(&current.TokenCounts, value.TokenCounts)
 	target[key] = current
 }
@@ -678,7 +691,7 @@ func (m *Metrics) addLifetimeSessionLocked(session string, tokens TokenCounts) {
 
 func cloneUsagePeriod(source UsagePeriod) UsagePeriod {
 	result := usagePeriod()
-	result.Requests, result.Reported, result.Tokens = source.Requests, source.Reported, source.Tokens
+	result.Requests, result.Reported, result.Tokens, result.Cost = source.Requests, source.Reported, source.Tokens, source.Cost
 	mergeTokenMaps(result.Models, source.Models)
 	mergeTokenMaps(result.Tiers, source.Tiers)
 	mergeTokenMaps(result.Sessions, source.Sessions)

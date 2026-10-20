@@ -102,16 +102,21 @@ func (m *RuntimeController) checkFreeModels(ctx context.Context) {
 			continue
 		}
 		result := r.gateway.probeFreeModel(ctx, item.Model)
-		if !result.attempted || ctx.Err() != nil {
-			continue
+		if ctx.Err() != nil {
+			return
 		}
+		// A probe that never reached the wire still has to move the schedule
+		// forward. Skipping the record would leave NextCheck untouched, so a
+		// model with no usable probe channel — an unsupported native protocol,
+		// or no key and no anonymous lane — would be re-evaluated on every
+		// tick forever without ever recording why.
 		// Config changes may replace credentials or endpoints during a probe.
 		m.updateMu.Lock()
 		if m.current.Load() == r {
 			if err := r.availability.Record(item.Model, item.Generation, result.success, result.reason, result.channel, time.Now().UTC(), result.effort); err != nil {
 				m.logger.Warn("model availability state save failed", "error", err)
 			}
-			m.logger.Info("free model availability checked", "component", "models", "event", "availability_checked", "model", item.Model, "available", result.success, "reason", result.reason, "channel", result.channel)
+			m.logger.Info("free model availability checked", "component", "models", "event", "availability_checked", "model", item.Model, "available", result.success, "reason", result.reason, "channel", result.channel, "attempted", result.attempted)
 		}
 		m.updateMu.Unlock()
 	}

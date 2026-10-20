@@ -25,6 +25,17 @@ export function el(tag, props = {}, children = []) {
 
 export const formatNumber = (value) => Number(value || 0).toLocaleString();
 
+// formatCost renders a USD amount. A real bill only needs cents, but a
+// sub-cent total must not be shown as zero, so the precision follows the
+// magnitude.
+export const formatCost = (value) => {
+  const amount = Number(value) || 0;
+  if (amount === 0) return "$0.00";
+  if (amount >= 0.01) return `$${amount.toFixed(2)}`;
+  if (amount >= 0.0001) return `$${amount.toFixed(4)}`;
+  return `$${amount.toFixed(6)}`;
+};
+
 export function localTime(value) {
   return value ? new Date(value).toLocaleString(dateLocale(), { hour12: false }) : "—";
 }

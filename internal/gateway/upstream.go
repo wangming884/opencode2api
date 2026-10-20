@@ -353,6 +353,11 @@ func (g *Gateway) doAnonymousUpstream(ctx context.Context, route models.Route, b
 				}
 				break
 			}
+			// Number the attempt before it is sent, exactly as the key lane
+			// does: attempt numbering is one-based across both lanes, so a
+			// request that falls back from anonymous to a key continues the
+			// count instead of restarting it at zero.
+			attempts++
 			setRequestShape(ctx, false, toolAliases[index])
 			if meta := telemetry.MetaFromContext(ctx); meta != nil {
 				meta.Attempts = attemptOffset + attempts
@@ -526,7 +531,10 @@ func knownOpencodeTool(name string) (opencodeToolDefinition, bool) {
 // ensured. System One payloads are decision requests, not agent traffic, so
 // they are forwarded verbatim, as is a body that is not a JSON object.
 func prepareAnonymousBody(body []byte, protocol wire.Protocol, v1 bool) ([]byte, string) {
-	if protocol == wire.SystemOne {
+	// Neither a System One decision nor an embeddings request has a chat shape
+	// to normalize: forcing stream or tools into them would corrupt the
+	// payload the upstream expects.
+	if protocol == wire.SystemOne || protocol == wire.Embeddings {
 		return body, ""
 	}
 	var payload map[string]any
@@ -924,6 +932,12 @@ func (g *Gateway) dumpOutboundBodies(route models.Route, bodies map[config.Tier]
 // that must be restored in the response, and whether the body changed so the
 // gateway can collapse the SSE stream a non-streaming client receives back.
 func (g *Gateway) shapeKeyBody(body []byte, route models.Route, tier config.Tier) ([]byte, string, bool) {
+	// An embeddings body has no chat shape to normalize: the free-model shaper
+	// would add stream and tool fields the upstream embeddings endpoint does
+	// not accept.
+	if route.Protocol == wire.Embeddings {
+		return body, "", false
+	}
 	if !g.catalog.IsFreeModel(route.ID) {
 		return body, "", false
 	}

@@ -16,7 +16,12 @@ coverage.out
 
 *.rotation.json
 .rotation-*.tmp
+*.limits.json
+.limits-*.tmp
 
 # Local credentials, deployment backups, and verification artifacts
 .local/
 *.availability.json
+
+# Local agent workspace state (never part of the project)
+.workbuddy-ai/

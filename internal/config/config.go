@@ -38,6 +38,8 @@ type Config struct {
 	Models            ModelsConfig                 `json:"models"`
 	Performance       PerformanceConfig            `json:"performance"`
 	Logging           LoggingConfig                `json:"logging"`
+	Metrics           MetricsConfig                `json:"metrics"`
+	Embeddings        EmbeddingsConfig             `json:"embeddings"`
 	WebUI             WebUIConfig                  `json:"webui"`
 	Prefer            Tier                         `json:"prefer"`
 	Reasoning         ReasoningConfig              `json:"reasoning"`
@@ -111,6 +113,30 @@ type LoggingConfig struct {
 	// so retry and translation problems can be diagnosed without patching the
 	// binary. Off by default: the bodies contain conversation content.
 	DumpRequestBodies bool `json:"dump_request_bodies"`
+}
+
+// MetricsConfig enables the Prometheus scrape endpoint at /metrics on the API
+// listener. It is off by default because the exposition describes upstream
+// keys, tiers and traffic, which a caller holding only a server key would
+// otherwise be able to read. Scraping authenticates with a configured
+// server_key, so enabling it means every enabled key can read the metrics.
+type MetricsConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// EmbeddingsConfig configures the /v1/embeddings relay. Enabled gates the
+// endpoint, which answers 404 while it is off.
+//
+// BaseURL, when set, sends embeddings to that OpenAI-compatible origin instead
+// of the Zen/Go pools. It is the way to serve embeddings at all when the
+// upstream gateway does not implement the endpoint, which OpenCode Zen does
+// not. The value is a base such as https://api.openai.com/v1; /embeddings is
+// appended unless the value already ends with it. APIKey authenticates there
+// and may be empty for a local server that does not require one.
+type EmbeddingsConfig struct {
+	Enabled bool   `json:"enabled"`
+	BaseURL string `json:"base_url,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
 }
 
 // WebUIConfig configures the management WebUI. Password is a plaintext
@@ -214,6 +240,9 @@ func Normalize(path string, cfg Config) (Config, error) {
 	}
 	trimList(&cfg.ServerKeys)
 	remapServerKeyMetadata(&cfg)
+	if err := normalizeServerKeyLimits(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	trimList(&cfg.ZenKeys)
 	trimList(&cfg.GoKeys)
@@ -237,6 +266,14 @@ func Normalize(path string, cfg Config) (Config, error) {
 		u, err := url.Parse(strings.TrimSpace(raw))
 		if err != nil || u.Host == "" || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") {
 			return Config{}, fmt.Errorf("%s must be an http or https URL", name)
+		}
+	}
+	cfg.Embeddings.BaseURL = strings.TrimSpace(cfg.Embeddings.BaseURL)
+	cfg.Embeddings.APIKey = strings.TrimSpace(cfg.Embeddings.APIKey)
+	if cfg.Embeddings.BaseURL != "" {
+		u, err := url.Parse(cfg.Embeddings.BaseURL)
+		if err != nil || u.Host == "" || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") {
+			return Config{}, errors.New("embeddings.base_url must be an http or https URL")
 		}
 	}
 	if len(cfg.ServerKeys) == 0 {
@@ -315,6 +352,40 @@ func Normalize(path string, cfg Config) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// normalizeServerKeyLimits validates and tidies each key's traffic policy:
+// negative values are rejected, model patterns are trimmed and deduplicated,
+// and a policy that limits nothing is dropped rather than persisted as an
+// empty object.
+func normalizeServerKeyLimits(cfg *Config) error {
+	for id, meta := range cfg.ServerKeyMetadata {
+		if meta.Limits == nil {
+			continue
+		}
+		limits := *meta.Limits
+		if limits.RPM < 0 || limits.DailyRequests < 0 || limits.DailyTokens < 0 {
+			return fmt.Errorf("server key limits for %s must not be negative", id)
+		}
+		models := make([]string, 0, len(limits.Models))
+		seen := make(map[string]bool, len(limits.Models))
+		for _, pattern := range limits.Models {
+			pattern = strings.TrimSpace(pattern)
+			if pattern == "" || seen[pattern] {
+				continue
+			}
+			seen[pattern] = true
+			models = append(models, pattern)
+		}
+		limits.Models = models
+		if limits.IsZero() {
+			meta.Limits = nil
+		} else {
+			meta.Limits = &limits
+		}
+		cfg.ServerKeyMetadata[id] = meta
+	}
+	return nil
 }
 
 func remapServerKeyMetadata(cfg *Config) {
@@ -423,6 +494,13 @@ func Clone(cfg Config) Config {
 	cfg.ServerKeys = append([]string(nil), cfg.ServerKeys...)
 	metadata := make(map[string]ServerKeyMetadata, len(cfg.ServerKeyMetadata))
 	for id, item := range cfg.ServerKeyMetadata {
+		// The policy is a pointer, so a shallow copy would let a later
+		// mutation of one config be visible in the other.
+		if item.Limits != nil {
+			limits := *item.Limits
+			limits.Models = append([]string(nil), item.Limits.Models...)
+			item.Limits = &limits
+		}
 		metadata[id] = item
 	}
 	cfg.ServerKeyMetadata = metadata

@@ -6,6 +6,9 @@
 // it to its endpoint and WriteError gives it the OpenAI error envelope. It has
 // no bridge encoding, so a cross-protocol conversion fails, and the gateway
 // forwards its decision payloads verbatim.
+//
+// Embeddings is a relay-only endpoint: Path maps it to /v1/embeddings and both
+// its request and its reply keep the OpenAI shape end to end.
 package protocol
 
 // Protocol names the wire protocol of a client-facing endpoint or of an
@@ -27,6 +30,10 @@ const (
 	// answers, so the payload shares no shape with the message protocols the
 	// bridge converts and is forwarded as-is.
 	SystemOne Protocol = "systemone"
+	// Embeddings is the OpenAI embeddings endpoint. It is a relay protocol
+	// only: a request and its reply already share one shape, so nothing is
+	// translated, and it never appears as a model's native protocol.
+	Embeddings Protocol = "embeddings"
 )
 
 // Valid reports whether p is one of the protocols defined above.
@@ -45,6 +52,8 @@ func Path(protocol Protocol) string {
 		return "/v1/messages"
 	case SystemOne:
 		return "/v1/systemone"
+	case Embeddings:
+		return "/v1/embeddings"
 	default:
 		return "/v1/chat/completions"
 	}

@@ -2,8 +2,8 @@
 import { api, derivedAPIBase, hasSession } from "../api.js";
 import { loadConfig } from "../data.js";
 import * as store from "../store.js";
-import { t, onChange } from "../i18n.js";
-import { $, el, emptyRow, formatNumber, localTime, confirmDialog, copyText, promptDialog, toast } from "../ui.js";
+import { t, onChange, dateLocale } from "../i18n.js";
+import { $, el, emptyRow, formatCost, formatNumber, localTime, confirmDialog, copyText, openDialog, promptDialog, toast } from "../ui.js";
 
 let keysLoading = false;
 let createdKey = "";
@@ -50,6 +50,124 @@ async function mutate(id, method, body, button) {
   }
 }
 
+// toLocalInput formats a stored timestamp for a datetime-local input, which
+// works in the browser's zone; the server always stores UTC.
+function toLocalInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// limitsSummary renders a key's policy in one line, or "unlimited" when it has
+// none. Every field is optional, so the line lists only what is set.
+function limitsSummary(limits) {
+  if (!limits) return t("不限", "apikeys.limits.unlimited");
+  const parts = [];
+  if (limits.rpm) parts.push(t(`${limits.rpm} 次/分`, "apikeys.limits.rpmShort", limits.rpm));
+  if (limits.daily_requests)
+    parts.push(
+      t(`${formatNumber(limits.daily_requests)} 次/日`, "apikeys.limits.dailyShort", formatNumber(limits.daily_requests)),
+    );
+  if (limits.daily_tokens)
+    parts.push(
+      t(`${formatNumber(limits.daily_tokens)} tokens/日`, "apikeys.limits.tokensShort", formatNumber(limits.daily_tokens)),
+    );
+  if (limits.models?.length)
+    parts.push(t(`${limits.models.length} 个模型`, "apikeys.limits.modelsShort", limits.models.length));
+  return parts.length ? parts.join(" · ") : t("不限", "apikeys.limits.unlimited");
+}
+
+// openLimitsDialog edits one key's policy. Saving sends the whole object;
+// clearing sends an empty one, which the server normalizes away.
+function openLimitsDialog(key, button) {
+  const limits = key.limits || {};
+  const numberField = (id, label, value, hint) => {
+    const input = el("input", { id, type: "number", min: "0", step: "1", value: value || "" });
+    return el("div", { class: "field" }, [
+      el("label", { for: id, text: label }),
+      input,
+      el("p", { class: "section-caption", text: hint }),
+    ]);
+  };
+  const modelsInput = el("textarea", {
+    id: "limit-models",
+    rows: "4",
+    placeholder: t("每行一个模型 ID，支持 gpt-* 这样的前缀", "apikeys.limits.modelsPlaceholder"),
+  });
+  modelsInput.value = (limits.models || []).join("\n");
+  const expiryInput = el("input", {
+    id: "limit-expiry",
+    type: "datetime-local",
+    value: toLocalInput(key.expires_at),
+  });
+
+  const body = el("div", { class: "stack" }, [
+    numberField("limit-rpm", t("每分钟请求上限", "apikeys.limits.rpm"), limits.rpm, t("0 表示不限。", "apikeys.limits.zeroHint")),
+    numberField(
+      "limit-daily",
+      t("每日请求上限", "apikeys.limits.daily"),
+      limits.daily_requests,
+      t("按 UTC 自然日统计，0 表示不限。", "apikeys.limits.dailyHint"),
+    ),
+    numberField(
+      "limit-tokens",
+      t("每日 token 额度", "apikeys.limits.tokens"),
+      limits.daily_tokens,
+      t("只统计上游上报的用量；超出后拒绝后续请求，0 表示不限。", "apikeys.limits.tokensHint"),
+    ),
+    el("div", { class: "field" }, [
+      el("label", { for: "limit-models", text: t("模型白名单", "apikeys.limits.models") }),
+      modelsInput,
+      el("p", { class: "section-caption", text: t("留空表示允许全部模型。", "apikeys.limits.modelsHint") }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { for: "limit-expiry", text: t("到期时间", "apikeys.expiry.field") }),
+      expiryInput,
+      el("p", { class: "section-caption", text: t("留空表示永不过期；到期后该 Key 立即停止认证。", "apikeys.expiry.hint") }),
+    ]),
+  ]);
+
+  const collect = () => ({
+    limits: {
+      rpm: Number($("#limit-rpm").value) || 0,
+      daily_requests: Number($("#limit-daily").value) || 0,
+      daily_tokens: Number($("#limit-tokens").value) || 0,
+      models: modelsInput.value
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    },
+    // An empty field clears the expiry; the server keeps the stored one only
+    // when the field is absent, which this form never does.
+    expires_at: expiryInput.value ? new Date(expiryInput.value).toISOString() : "",
+  });
+
+  openDialog({
+    title: t(`限额与有效期 · ${key.name}`, "apikeys.limits.title", key.name),
+    body,
+    actions: [
+      { label: t("取消", "common.cancel") },
+      {
+        label: t("清除限额", "apikeys.limits.clear"),
+        onClick: (close) => {
+          close();
+          mutate(key.id, "PATCH", { limits: {}, expires_at: "" }, button);
+        },
+      },
+      {
+        label: t("保存", "common.save"),
+        kind: "btn-primary",
+        onClick: (close) => {
+          close();
+          const values = collect();
+          mutate(key.id, "PATCH", values, button);
+        },
+      },
+    ],
+  });
+}
+
 function render(keys) {
   keys = keys || [];
   $("#api-key-count").textContent = t(`${keys.length} 个`, "apikeys.count", keys.length);
@@ -63,7 +181,7 @@ function render(keys) {
   for (const key of keys) {
     const usage = key.usage || {};
     const summary = (value = {}) =>
-      `${formatNumber(value.requests)} ${t("次", "apikeys.times")} · ${formatNumber(value.total_tokens)} tokens`;
+      `${formatNumber(value.requests)} ${t("次", "apikeys.times")} · ${formatNumber(value.total_tokens)} tokens · ${formatCost(value.cost_usd)}`;
     const rename = el("button", { type: "button", class: "btn btn-sm btn-ghost", text: t("重命名", "common.rename") });
     rename.addEventListener("click", async () => {
       const name = await promptDialog({
@@ -81,6 +199,12 @@ function render(keys) {
     });
     toggle.addEventListener("click", () => mutate(key.id, "PATCH", { enabled: !key.enabled }, toggle));
     const remove = el("button", { type: "button", class: "btn btn-sm btn-danger", text: t("删除", "common.delete") });
+    const limitsButton = el("button", {
+      type: "button",
+      class: "btn btn-sm btn-ghost",
+      text: t("限额", "apikeys.limits.button"),
+    });
+    limitsButton.addEventListener("click", () => openLimitsDialog(key, limitsButton));
     remove.addEventListener("click", async () => {
       const ok = await confirmDialog({
         title: t("删除 API Key", "common.delete"),
@@ -99,16 +223,42 @@ function render(keys) {
         el("td", { text: key.name }),
         el("td", { class: "mono", text: key.display }),
         el("td", {
-          class: `status ${key.enabled ? "ok" : "warn"}`,
-          text: key.enabled ? t("已启用", "state.enabled") : t("已停用", "state.disabled"),
+          class: `status ${key.expired || !key.enabled ? "warn" : "ok"}`,
+          text: key.expired
+            ? t("已过期", "apikeys.expired")
+            : key.enabled
+              ? t("已启用", "state.enabled")
+              : t("已停用", "state.disabled"),
         }),
         el("td", { text: `${summary(usage.last_hour)} / ${summary(usage.lifetime)}` }),
+        el("td", {}, [
+          el("div", {
+            text: t(
+              `今日 ${formatNumber(key.today?.day_requests)} 次 · ${formatNumber(key.today?.day_tokens)} tokens`,
+              "apikeys.limits.today",
+              formatNumber(key.today?.day_requests),
+              formatNumber(key.today?.day_tokens),
+            ),
+          }),
+          el("div", {
+            class: "section-caption",
+            text: `${limitsSummary(key.limits)} · ${
+              key.expires_at
+                ? t(
+                    `至 ${new Date(key.expires_at).toLocaleDateString(dateLocale())}`,
+                    "apikeys.expiry.until",
+                    new Date(key.expires_at).toLocaleDateString(dateLocale()),
+                  )
+                : t("永不过期", "apikeys.expiry.never")
+            }`,
+          }),
+        ]),
         el("td", { text: key.created_at ? localTime(key.created_at) : t("已有配置", "apikeys.col.legacy") }),
-        el("td", {}, [el("div", { class: "key-actions" }, [rename, toggle, remove])]),
+        el("td", {}, [el("div", { class: "key-actions" }, [limitsButton, rename, toggle, remove])]),
       ]),
     );
   }
-  if (!keys.length) emptyRow(host, 6, t("暂无 API Key", "apikeys.empty"));
+  if (!keys.length) emptyRow(host, 7, t("暂无 API Key", "apikeys.empty"));
 }
 
 async function create(event) {
