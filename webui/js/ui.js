@@ -55,7 +55,9 @@ export function toast(message, bad = false) {
   node.classList.toggle("bad-toast", bad);
   node.classList.remove("hidden");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => node.classList.add("hidden"), 3600);
+  // A failure is the message the operator must not miss — a rejected save
+  // leaves the form looking fine, so it stays up twice as long as a success.
+  toastTimer = setTimeout(() => node.classList.add("hidden"), bad ? 8000 : 3600);
 }
 
 export async function copyText(text, okMessage = t("已复制", "toast.copied")) {

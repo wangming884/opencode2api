@@ -206,8 +206,9 @@ func (a *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handlePutConfig resolves the submitted secrets against the current ones,
 // keeps what the update omits (rotation, server key metadata, the WebUI
-// username and password hash, and reasoning when the field is absent), and
-// hands the result to the runtime, which validates, applies and persists it.
+// username and password hash, the model aliases and hidden list, and reasoning
+// when the field is absent), and hands the result to the runtime, which
+// validates, applies and persists it.
 func (a *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var update ConfigUpdate
 	if err := decodeAdminJSON(w, r, &update); err != nil {
@@ -239,6 +240,7 @@ func (a *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if update.Reasoning != nil {
 		reasoning = *update.Reasoning
 	}
+	models := mergeModelsUpdate(current.Models, update.Models)
 	candidate := config.Config{
 		ServerKeyMetadata: current.ServerKeyMetadata,
 		Rotation:          current.Rotation,
@@ -248,7 +250,7 @@ func (a *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		Metrics:    current.Metrics,
 		Embeddings: current.Embeddings,
 		Listen:     update.Listen, ServerKeys: serverKeys, ZenKeys: zenKeys, GoKeys: goKeys, Anonymous: update.Anonymous, Proxies: proxies, ProxyFile: update.ProxyFile,
-		Upstream: update.Upstream, Retry: update.Retry, Models: update.Models, Performance: update.Performance, Logging: update.Logging, Prefer: update.Prefer,
+		Upstream: update.Upstream, Retry: update.Retry, Models: models, Performance: update.Performance, Logging: update.Logging, Prefer: update.Prefer,
 		Reasoning: reasoning,
 		WebUI:     config.WebUIConfig{Enabled: update.WebUI.Enabled, Listen: update.WebUI.Listen, Username: current.WebUI.Username, PasswordHash: current.WebUI.PasswordHash, SessionTTLMinutes: update.WebUI.SessionTTLMinutes},
 	}
@@ -459,4 +461,19 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, target any) error {
 // writeAdminError answers with {"error":{"code":...,"message":...}}.
 func writeAdminError(w http.ResponseWriter, status int, code, message string) {
 	httpx.WriteJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+// mergeModelsUpdate carries over the model fields an update omits. A client
+// that predates a field never sends it, and an omitted list must not read as
+// "clear it": that silently dropped aliases configured from the console
+// whenever an older page, or a script, saved the form. The console always
+// sends both, so an explicit empty object or array still clears them.
+func mergeModelsUpdate(current, update config.ModelsConfig) config.ModelsConfig {
+	if update.Aliases == nil {
+		update.Aliases = current.Aliases
+	}
+	if update.Hidden == nil {
+		update.Hidden = current.Hidden
+	}
+	return update
 }
