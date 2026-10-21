@@ -44,6 +44,24 @@ async function load() {
   }
 }
 
+// The status line doubles as the unsaved-changes indicator, so it has to refresh
+// on every keystroke — but a full render() would rebuild the alias input and
+// drop the caret, so the line is updated on its own.
+function renderStatus() {
+  if (!data) return;
+  $("#rotation-status").textContent = [
+    data.persistence_error || t("状态已更新 · 两组独立轮转，所有调用方共享当前位置。", "rotation.status"),
+    dirty ? t("有未保存的修改", "common.unsaved") : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function markDirty() {
+  dirty = true;
+  renderStatus();
+}
+
 function renderGroup(group) {
   const reasonMap = reasons();
   const aliasInput = el("input", {
@@ -54,7 +72,7 @@ function renderGroup(group) {
   });
   aliasInput.addEventListener("input", () => {
     group.alias = aliasInput.value;
-    dirty = true;
+    markDirty();
   });
   const table = el("table", { class: "table" }, [
     el("thead", {}, [
@@ -108,7 +126,7 @@ function renderGroup(group) {
           group.order[index],
         ];
         data.first_output_seconds = Number($("#rotation-timeout").value);
-        dirty = true;
+        markDirty();
         render();
       });
       actions.append(button);
@@ -183,10 +201,11 @@ function renderGroup(group) {
 function render() {
   if (!data) return;
   const reasonMap = reasons();
-  $("#rotation-status").textContent =
-    data.persistence_error ||
-    t("状态已更新 · 两组独立轮转，所有调用方共享当前位置。", "rotation.status");
-  $("#rotation-timeout").value = data.first_output_seconds;
+  renderStatus();
+  // Only seed the timeout field when there is nothing unsaved. Re-rendering
+  // after a manual switch used to overwrite a freshly typed value with the
+  // last saved one, and the edit disappeared without a word.
+  if (!dirty) $("#rotation-timeout").value = data.first_output_seconds;
   const host = $("#rotation-groups");
   host.replaceChildren();
   for (const group of data.groups) host.append(renderGroup(group));
@@ -239,9 +258,7 @@ export default {
       }
       load();
     });
-    $("#rotation-timeout").addEventListener("input", () => {
-      dirty = true;
-    });
+    $("#rotation-timeout").addEventListener("input", markDirty);
     $("#rotation-form").addEventListener("submit", save);
     onChange(() => {
       if (data) {
@@ -250,5 +267,10 @@ export default {
       }
     });
   },
-  show: load,
+  // Re-entering the page reloads live state, but not over unsaved edits: the
+  // status line already says they are still pending.
+  show() {
+    if (dirty) return;
+    load();
+  },
 };

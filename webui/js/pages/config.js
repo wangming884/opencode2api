@@ -45,6 +45,19 @@ function secretInputs(name) {
 
 const numberValue = (selector) => Number($(selector).value);
 
+// fillConfig rewrites every field, so it must not run while the operator has
+// unsaved edits. The topbar refresh calls loadConfig(), which pushes a new
+// config into the store; before this guard, pressing refresh while filling in
+// the form silently discarded everything typed so far.
+let dirty = false;
+
+// The badge is the only reliable signal here: a toast would be immediately
+// overwritten by the topbar refresh's own "refreshed" toast.
+function setDirty(value) {
+  dirty = value;
+  $("#config-dirty").classList.toggle("hidden", !value);
+}
+
 function fillConfig(value) {
   if (!value) return;
   $("#c-listen").value = value.listen;
@@ -127,6 +140,7 @@ async function save(event) {
       },
     };
     const result = await api("/api/config", { method: "PUT", body: JSON.stringify(update) });
+    setDirty(false);
     store.set("config", result.config);
     ["server_keys", "zen_keys", "go_keys", "proxies"].forEach(
       (name) => ($(`#${name}-new`).value = ""),
@@ -149,6 +163,9 @@ async function save(event) {
 async function reload() {
   try {
     const result = await api("/api/config/reload", { method: "POST", body: "{}" });
+    // Reload is an explicit "throw away what is on screen" action, so it is
+    // allowed to overwrite the form.
+    setDirty(false);
     await loadConfig();
     await loadDebugModels();
     toast(
@@ -204,9 +221,20 @@ export default {
   title: "配置中心",
   sub: "验证后原子保存，并热应用可变字段。",
   init() {
-    store.on("config", fillConfig);
+    store.on("config", (value) => {
+      if (dirty) return;
+      fillConfig(value);
+    });
     bindTabs($("#page-config"));
     $("#config-form").addEventListener("submit", save);
+    // `input` covers text fields as they are typed, `change` covers selects and
+    // checkboxes, and the chips are removed by click rather than by editing a
+    // field, so the form listens for all three.
+    $("#config-form").addEventListener("input", () => setDirty(true));
+    $("#config-form").addEventListener("change", () => setDirty(true));
+    $("#page-config").addEventListener("click", (event) => {
+      if (event.target.closest(".chips button")) setDirty(true);
+    });
     $("#reload-config").addEventListener("click", reload);
     $("#reveal").addEventListener("click", reveal);
     onChange(() => {

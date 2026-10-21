@@ -14,7 +14,11 @@
 //   t(`${n} 个`, "apikeys.count", n)
 const STORAGE_KEY = "opencode2api.ui.lang";
 const DEFAULT_LOCALE = "zh-CN";
-const FLAGS = { "zh-CN": "🇨🇳", en: "🇺🇸", vi: "🇻🇳" };
+// Flags are deliberately not used here: Windows ships no colour emoji font for
+// regional-indicator pairs, so 🇺🇸 renders as the two letters "us" and the
+// picker looks broken. Short codes render identically everywhere, and each
+// option still carries its full name as the accessible label.
+const SHORT = { "zh-CN": "中文", en: "EN", vi: "VI" };
 const SUPPORTED = ["zh-CN", "en", "vi"];
 const LABELS = { "zh-CN": "简体中文", en: "English", vi: "Tiếng Việt" };
 const DATE_LOCALES = { "zh-CN": "zh-CN", en: "en-US", vi: "vi-VN" };
@@ -26,33 +30,28 @@ const DICTIONARY = {
     en: {
       "doc.title": "opencode2api · Operations Handbook",
       "lang.label": "Language",
+      "a11y.skip": "Skip to main content",
+      "a11y.nav": "Page navigation",
+      "a11y.tabs.overview": "Overview views",
+      "a11y.tabs.diagnostics": "Diagnostics views",
+      "a11y.tabs.quotas": "Model views",
+      "a11y.tabs.config": "Configuration sections",
+      "a11y.logLevel": "Log level",
 
-      "login.eyebrow": "Admin operations handbook / 2026",
-      "login.headline": "Bring protocols, routing, and runtime state onto one desk.",
-      "login.intro":
-        "A local control plane with no external frontend. Configure, verify, connect, then keep the Gateway easy to explain.",
-      "login.restricted": "Restricted console",
       "login.title": "Admin sign-in",
       "login.username": "Username",
       "login.password": "Password",
       "login.submit": "Enter the Operations Handbook",
 
-      "sidebar.kicker": "Operations console",
-      "sidebar.title": "Operations Handbook",
       "nav.overview": "Operations desk",
-      "nav.guide": "First run",
       "nav.access": "Integration handbook",
-      "nav.usage": "Token usage",
-      "nav.playground": "Playground",
       "nav.diagnostics": "Routing diagnostics",
       "nav.config": "Configuration center",
-      "nav.logs": "Event log",
       "nav.account": "Account security",
       "nav.model-quotas": "Models and quotas",
       "nav.api-keys": "API Key management",
       "nav.rotation": "Model rotation",
       "nav.metrics": "Metrics",
-      "nav.availability": "Free model availability",
       "nav.group.runtime": "Runtime",
       "nav.group.integration": "Integration",
       "nav.group.models": "Models",
@@ -78,26 +77,16 @@ const DICTIONARY = {
       "topbar.refresh": "Refresh now",
       "topbar.logout": "Sign out",
 
-      "page.availability.title": "Free model availability",
-      "page.availability.sub": "Probed hourly; user-controlled models are not affected.",
       "page.rotation.title": "Model rotation",
       "page.rotation.sub": "Shared current model, failover on error, and attempt history.",
       "page.overview.title": "Operations desk",
       "page.overview.sub": "The last hour, process totals, and current resources.",
-      "page.guide.title": "First run",
-      "page.guide.sub": "Six checkpoints from configuration to your first request.",
       "page.access.title": "Integration handbook",
       "page.access.sub": "Chat, Responses, Anthropic, and SDK examples.",
-      "page.usage.title": "Token usage",
-      "page.usage.sub": "Coverage, per-minute trend, model ranking, and Tier distribution.",
-      "page.playground.title": "Playground",
-      "page.playground.sub": "Three input protocols sharing real Gateway routing and diagnostics.",
       "page.diagnostics.title": "Routing diagnostics",
       "page.diagnostics.sub": "Metadata, model eligibility, and each upstream attempt.",
       "page.config.title": "Configuration center",
       "page.config.sub": "Validate, then save atomically and hot-apply the fields that can change.",
-      "page.logs.title": "Event log",
-      "page.logs.sub": "Structured SSE data from the in-process ring buffer.",
       "page.account.title": "Account security",
       "page.account.sub": "A successful update revokes every admin session.",
       "page.model-quotas.title": "Models and quotas",
@@ -129,12 +118,10 @@ const DICTIONARY = {
       "overview.cost": "Total spend",
       "overview.costNote": "Estimated from catalog prices",
       "overview.proxy.title": "Proxy nodes",
-      "overview.proxy.caption": "These are proxy nodes; they are not described as exit IPs.",
       "overview.proxy.col.node": "Node",
       "overview.proxy.col.health": "Health",
       "overview.proxy.col.binding": "Binding",
       "overview.keys.title": "Key pool",
-      "overview.keys.caption": "Only the last 5 characters of a key and its cooldown state are shown.",
       "overview.keys.col.tail": "Key tail",
       "overview.keys.col.tier": "Tier",
       "overview.keys.col.state": "State",
@@ -142,11 +129,6 @@ const DICTIONARY = {
       "overview.distribution.caption":
         "Aggregated over the last hour by endpoint, model, Tier, and status code.",
 
-      "guide.title": "6-step deployment check",
-      "guide.caption":
-        "State is read from the current configuration and live resources; nothing is written to browser storage.",
-      "guide.step.login": "Sign in to the admin console",
-      "guide.step.login.desc": "The current session has been verified by the server.",
       "guide.step.serverkey": "Configure a Server Key",
       "guide.step.serverkey.desc": "Clients use the Server Key to reach the Gateway.",
       "guide.step.upstream": "Pick an upstream channel",
@@ -154,15 +136,9 @@ const DICTIONARY = {
       "guide.step.proxy": "Check the proxies",
       "guide.step.proxy.desc": "At least one proxy node is still healthy.",
       "guide.step.models": "Wait for the model catalog",
-      "guide.step.access": "Copy an integration example",
-      "guide.step.access.desc": "Open the Integration handbook and replace the model and YOUR_API_KEY.",
       "guide.done": "✓ Ready",
       "guide.todo": "○ Needs work",
 
-      "access.base": "Base address",
-      "access.protocols": "Three protocols",
-      "access.sdk": "SDK example",
-      "access.notes": "Integration notes",
       "access.base.title": "Base address",
       "access.base.caption": "The examples never contain a real Server Key.",
       "access.base.label": "Derived API Base",
@@ -175,8 +151,6 @@ const DICTIONARY = {
         "Anthropic clients can use <code>x-api-key</code> with the <code>/v1/messages</code> path.",
       "access.notes.stream":
         "Streaming requests keep the events of the original protocol; the Gateway converts when the protocols differ.",
-      "access.notes.listen":
-        "If the listener is bound to <code>0.0.0.0</code>, the examples use the current browser's hostname.",
 
       "usage.coverage": "Usage coverage",
       "usage.coverage.note": "Requests reporting token or reasoning usage",
@@ -216,9 +190,6 @@ const DICTIONARY = {
       "diagnostics.metadata.title": "Model metadata",
       "diagnostics.metadata.caption":
         "Status of the price cache from the OpenCode metadata endpoint; a price of 0 or a name containing free is enough to qualify for the anonymous channel.",
-      "diagnostics.last.title": "Latest playground run",
-      "diagnostics.last.caption":
-        "Only the last run is retained in the current admin process.",
       "diagnostics.models.title": "Model routing table",
       "diagnostics.models.caption":
         "Explicit protocol, anonymous eligibility source, and how cost is determined.",
@@ -259,8 +230,6 @@ const DICTIONARY = {
       "config.secrets.anonymous": "Enable the Zen anonymous channel",
       "config.secrets.add": "One key per line",
       "config.proxy.title": "Proxy nodes",
-      "config.proxy.caption":
-        "Supports direct, HTTP(S), and SOCKS URLs. Suffix an entry with #pool to mark it as a rotating proxy pool: the gateway then opens a fresh connection per attempt, skips its cooldown and health eviction, and retries it up to retry.max_attempts times.",
       "config.proxy.add": "Add proxies (one per line)",
       "config.upstream.title": "Upstream and protocol routing",
       "config.upstream.caption":
@@ -326,8 +295,6 @@ const DICTIONARY = {
       "rotation.refresh": "Refresh status",
       "rotation.usage":
         "Keep your existing Base URL and API Key and set OPENAI_MODEL to the alias below. Each model is retried up to 3 times on ordinary errors, and a single request tries at most 3 models; a quota-exhausted model is skipped immediately.",
-      "rotation.streaming":
-        "Once output has started, the current answer stays on one model. A mid-stream error ends that output, and only the next request switches models. Models share the plan quota, so switching models does not guarantee escaping a quota exhaustion.",
       "rotation.timeout": "Maximum wait for the first valid output (seconds)",
       "rotation.save": "Save aliases and order",
       "rotation.saveNote":
@@ -380,7 +347,7 @@ const DICTIONARY = {
 
       "apikeys.create.title": "Create an API Key for a caller",
       "apikeys.create.caption":
-        "Used to reach the B service on this machine. Each application can have its own key; creating, enabling/disabling, and deleting all take effect immediately.",
+        "Used to reach the Gateway on this machine. Each application can have its own key; creating, enabling or disabling, and deleting all take effect immediately.",
       "apikeys.create.name": "Name",
       "apikeys.create.namePlaceholder": "e.g. my notes helper",
       "apikeys.create.value": "Custom key value (optional)",
@@ -395,7 +362,7 @@ const DICTIONARY = {
       "apikeys.created.copyEnv": "Copy environment variable",
       "apikeys.list.title": "Access keys",
       "apikeys.list.caption":
-        "Manage access to the B service. OpenCode Go upstream keys stay in the Configuration center.",
+        "Manage who may call the Gateway. OpenCode upstream keys stay in the Configuration center.",
       "apikeys.list.refresh": "Refresh list",
       "apikeys.col.name": "Name",
       "apikeys.col.tail": "Key tail",
@@ -440,7 +407,6 @@ const DICTIONARY = {
       "account.new": "New password (blank to keep the current one, at least 10 characters)",
       "account.submit": "Update and sign in again",
 
-      "modal.eyebrow": "Sensitive value",
       "modal.title": "Sensitive configuration",
       "modal.close": "Close",
 
@@ -453,7 +419,6 @@ const DICTIONARY = {
       "common.view": "Reveal",
       "common.notReady": "Not ready yet",
       "modal.revealTitle": "Reveal sensitive configuration",
-      "common.clipboard": "The browser does not allow clipboard access",
       "common.empty": "No data yet",
       "common.remove": "Remove",
       "common.duration": "Duration",
@@ -467,9 +432,10 @@ const DICTIONARY = {
       "common.allowed": "Allowed",
       "common.denied": "Denied",
       "common.unknown": "Unknown",
-      "page.section": "Section {0}",
 
       "error.session": "Your session has expired",
+      "error.timeout": "The request timed out after {0} s",
+      "toast.refreshFailed": "Refresh failed",
 
       "state.healthy": "Healthy",
       "state.unavailable": "Unavailable",
@@ -524,12 +490,6 @@ const DICTIONARY = {
       "diag.stale": "Stale",
       "diag.lastError": "Last error",
       "diag.notUpdated": "Not updated",
-      "diag.result": "Result",
-      "diag.ok": "Success",
-      "diag.failed": "Failed",
-      "diag.route": "Route",
-      "diag.state": "State",
-      "diag.noTrace": "No playground trace data",
       "diag.streamError": "Streaming failed",
       "diag.clientCanceled": "Client canceled",
       "diag.noRequests": "No requests have been routed",
@@ -563,11 +523,9 @@ const DICTIONARY = {
       "apikeys.count": "{0} keys",
       "apikeys.enabledCount": "{0} keys enabled",
       "apikeys.times": "times",
-      "apikeys.rename": "Rename",
       "apikeys.namePrompt": "Key name",
       "apikeys.enable": "Enable",
       "apikeys.disable": "Disable",
-      "apikeys.delete": "Delete",
       "apikeys.confirmDelete":
         "After deleting “{0}”, applications using this key will lose access. Delete it for real?",
       "apikeys.empty": "No API Keys yet",
@@ -612,7 +570,26 @@ const DICTIONARY = {
       "availability.switchManual": "Switch to manual",
       "availability.noneEligible":
         "No model in the current catalog qualifies as free.",
+      "availability.channel.anonymous": "Anonymous channel",
+      "availability.channel.zen": "Zen Key",
+      "availability.reason.probeSucceeded": "Probe succeeded",
+      "availability.reason.modelUnavailable": "Model unavailable",
+      "availability.reason.invalidResponse": "Invalid or incomplete response",
+      "availability.reason.probeTimeout": "Probe timed out",
+      "availability.reason.transportError": "Network or proxy error",
+      "availability.reason.conversionError": "Request conversion failed",
+      "availability.reason.creationError": "Could not build the request",
+      "availability.reason.unsupportedProbe": "Protocol cannot be probed",
+      "availability.reason.noChannel": "No probe channel available",
+      "availability.reason.notFree": "Not a free model",
+      "availability.reason.canceled": "Cancelled",
+      "availability.reason.manuallyEnabled": "Enabled manually",
+      "availability.reason.autoProbe": "Automatic probe",
+      "availability.reason.legacyRecheck": "Legacy record, recheck pending",
+      "availability.reason.http": "HTTP {0}",
 
+      "common.unsaved":
+        "Unsaved changes",
       "config.restartNotice":
         "Saved but not in effect yet: {0}. The current API is {1}, the WebUI is {2}. Please restart the process.",
       "config.revealPrompt": "Re-enter the admin password",
@@ -639,33 +616,28 @@ const DICTIONARY = {
     vi: {
       "doc.title": "opencode2api · Sổ tay vận hành",
       "lang.label": "Ngôn ngữ",
+      "a11y.skip": "Chuyển tới nội dung chính",
+      "a11y.nav": "Điều hướng trang",
+      "a11y.tabs.overview": "Chế độ xem tổng quan",
+      "a11y.tabs.diagnostics": "Chế độ xem chẩn đoán",
+      "a11y.tabs.quotas": "Chế độ xem mô hình",
+      "a11y.tabs.config": "Phần cấu hình",
+      "a11y.logLevel": "Mức log",
 
-      "login.eyebrow": "Sổ tay vận hành dành cho quản trị / 2026",
-      "login.headline": "Đưa giao thức, định tuyến và trạng thái vận hành lên cùng một bàn.",
-      "login.intro":
-        "Một bảng điều khiển cục bộ, không phụ thuộc frontend bên ngoài. Cấu hình, kiểm tra, kết nối, rồi để Gateway luôn dễ giải thích.",
-      "login.restricted": "Bảng điều khiển hạn chế",
       "login.title": "Đăng nhập quản trị",
       "login.username": "Tài khoản",
       "login.password": "Mật khẩu",
       "login.submit": "Vào Sổ tay vận hành",
 
-      "sidebar.kicker": "Bảng điều khiển vận hành",
-      "sidebar.title": "Sổ tay vận hành",
       "nav.overview": "Bàn vận hành",
-      "nav.guide": "Khởi động lần đầu",
       "nav.access": "Sổ tay tích hợp",
-      "nav.usage": "Mức dùng token",
-      "nav.playground": "Playground",
       "nav.diagnostics": "Chẩn đoán định tuyến",
       "nav.config": "Trung tâm cấu hình",
-      "nav.logs": "Nhật ký sự kiện",
       "nav.account": "Bảo mật tài khoản",
       "nav.model-quotas": "Mô hình và hạn mức",
       "nav.api-keys": "Quản lý API Key",
       "nav.rotation": "Luân chuyển mô hình",
       "nav.metrics": "Chỉ số giám sát",
-      "nav.availability": "Mô hình miễn phí",
       "nav.group.runtime": "Vận hành",
       "nav.group.integration": "Tích hợp",
       "nav.group.models": "Mô hình",
@@ -691,26 +663,16 @@ const DICTIONARY = {
       "topbar.refresh": "Làm mới ngay",
       "topbar.logout": "Đăng xuất",
 
-      "page.availability.title": "Mô hình miễn phí",
-      "page.availability.sub": "Dò mỗi giờ; mô hình do người dùng điều khiển không bị ảnh hưởng.",
       "page.rotation.title": "Luân chuyển mô hình",
       "page.rotation.sub": "Mô hình hiện tại, chuyển đổi khi lỗi và lịch sử thử.",
       "page.overview.title": "Bàn vận hành",
       "page.overview.sub": "Một giờ gần nhất, số liệu tích lũy của tiến trình và tài nguyên hiện tại.",
-      "page.guide.title": "Khởi động lần đầu",
-      "page.guide.sub": "Sáu điểm kiểm tra để đi từ cấu hình đến request đầu tiên.",
       "page.access.title": "Sổ tay tích hợp",
       "page.access.sub": "Ví dụ Chat, Responses, Anthropic và SDK.",
-      "page.usage.title": "Mức dùng token",
-      "page.usage.sub": "Độ phủ, xu hướng mỗi phút, xếp hạng mô hình và phân bố Tier.",
-      "page.playground.title": "Playground",
-      "page.playground.sub": "Ba giao thức đầu vào dùng chung định tuyến Gateway thật và chẩn đoán.",
       "page.diagnostics.title": "Chẩn đoán định tuyến",
       "page.diagnostics.sub": "Metadata, điều kiện mô hình và từng lần thử upstream.",
       "page.config.title": "Trung tâm cấu hình",
       "page.config.sub": "Kiểm tra rồi lưu nguyên tử, áp dụng nóng các trường có thể thay đổi.",
-      "page.logs.title": "Nhật ký sự kiện",
-      "page.logs.sub": "Dữ liệu SSE có cấu trúc từ ring buffer trong bộ nhớ tiến trình.",
       "page.account.title": "Bảo mật tài khoản",
       "page.account.sub": "Cập nhật xong sẽ thu hồi toàn bộ session quản trị.",
       "page.model-quotas.title": "Mô hình và hạn mức",
@@ -742,12 +704,10 @@ const DICTIONARY = {
       "overview.cost": "Tổng chi phí",
       "overview.costNote": "Ước tính theo giá trong danh mục",
       "overview.proxy.title": "Nút Proxy",
-      "overview.proxy.caption": "Ở đây hiển thị các nút proxy, không mô tả chúng là IP đầu ra.",
       "overview.proxy.col.node": "Nút",
       "overview.proxy.col.health": "Sức khoẻ",
       "overview.proxy.col.binding": "Ràng buộc",
       "overview.keys.title": "Nhóm Key",
-      "overview.keys.caption": "Chỉ hiển thị 5 ký tự cuối của Key và trạng thái cooldown.",
       "overview.keys.col.tail": "Đuôi Key",
       "overview.keys.col.tier": "Tier",
       "overview.keys.col.state": "Trạng thái",
@@ -755,11 +715,6 @@ const DICTIONARY = {
       "overview.distribution.caption":
         "Tổng hợp 1 giờ gần nhất theo endpoint, mô hình, Tier và mã trạng thái.",
 
-      "guide.title": "Kiểm tra 6 bước để triển khai",
-      "guide.caption":
-        "Trạng thái lấy từ cấu hình hiện tại và tài nguyên thời gian thực, không ghi vào bộ nhớ trình duyệt.",
-      "guide.step.login": "Đăng nhập bảng quản trị",
-      "guide.step.login.desc": "Session hiện tại đã được máy chủ xác minh.",
       "guide.step.serverkey": "Cấu hình Key cục bộ",
       "guide.step.serverkey.desc": "Client dùng Server Key để truy cập Gateway.",
       "guide.step.upstream": "Chọn kênh upstream",
@@ -767,15 +722,9 @@ const DICTIONARY = {
       "guide.step.proxy": "Kiểm tra Proxy",
       "guide.step.proxy.desc": "Có ít nhất một nút proxy còn khỏe.",
       "guide.step.models": "Chờ danh mục mô hình",
-      "guide.step.access": "Sao chép ví dụ tích hợp",
-      "guide.step.access.desc": "Vào Sổ tay tích hợp, thay mô hình và YOUR_API_KEY.",
       "guide.done": "✓ Đã sẵn sàng",
       "guide.todo": "○ Cần xử lý",
 
-      "access.base": "Địa chỉ cơ sở",
-      "access.protocols": "Ba giao thức",
-      "access.sdk": "Ví dụ SDK",
-      "access.notes": "Lưu ý tích hợp",
       "access.base.title": "Địa chỉ cơ sở",
       "access.base.caption": "Ví dụ không ghi Server Key thật.",
       "access.base.label": "API Base được suy ra",
@@ -788,8 +737,6 @@ const DICTIONARY = {
         "Client Anthropic có thể dùng <code>x-api-key</code>, với đường dẫn <code>/v1/messages</code>.",
       "access.notes.stream":
         "Request streaming giữ nguyên sự kiện của giao thức gốc; khi khác giao thức, Gateway sẽ chuyển đổi.",
-      "access.notes.listen":
-        "Nếu cấu hình lắng nghe ở <code>0.0.0.0</code>, ví dụ sẽ dùng tên máy chủ của trình duyệt hiện tại.",
 
       "usage.coverage": "Độ phủ sử dụng",
       "usage.coverage.note": "Yêu cầu có token trả về / suy luận",
@@ -829,9 +776,6 @@ const DICTIONARY = {
       "diagnostics.metadata.title": "Metadata mô hình",
       "diagnostics.metadata.caption":
         "Trạng thái cache giá từ điểm cuối metadata OpenCode; giá bằng 0 hoặc tên chứa free là đủ điều kiện vào kênh ẩn danh.",
-      "diagnostics.last.title": "Playground gần nhất",
-      "diagnostics.last.caption":
-        "Chỉ giữ lần theo dõi cuối cùng trong tiến trình quản trị hiện tại.",
       "diagnostics.models.title": "Bảng định tuyến mô hình",
       "diagnostics.models.caption":
         "Giao thức tường minh, nguồn điều kiện ẩn danh và cách xác định chi phí.",
@@ -872,8 +816,6 @@ const DICTIONARY = {
       "config.secrets.anonymous": "Bật kênh ẩn danh Zen",
       "config.secrets.add": "Mỗi dòng thêm một key",
       "config.proxy.title": "Nút Proxy",
-      "config.proxy.caption":
-        "Hỗ trợ direct, HTTP(S) và URL SOCKS. Thêm hậu tố #pool để đánh dấu mục đó là proxy pool luân chuyển: gateway sẽ mở kết nối mới cho mỗi lần thử, bỏ qua cooldown và loại bỏ theo sức khoẻ, và thử lại tối đa retry.max_attempts lần.",
       "config.proxy.add": "Thêm Proxy (mỗi dòng một cái)",
       "config.upstream.title": "Upstream và định tuyến giao thức",
       "config.upstream.caption":
@@ -940,8 +882,6 @@ const DICTIONARY = {
       "rotation.refresh": "Làm mới trạng thái",
       "rotation.usage":
         "Giữ nguyên Base URL và API Key hiện có, đặt OPENAI_MODEL là bí danh bên dưới. Mỗi mô hình lỗi thường được thử tối đa 3 lần, mỗi request tối đa thử 3 mô hình; hết hạn mức thì bỏ qua ngay.",
-      "rotation.streaming":
-        "Sau khi bắt đầu có output, câu trả lời hiện tại giữ nguyên một mô hình. Lỗi giữa chừng sẽ kết thúc output đó, chỉ request sau mới đổi mô hình. Các mô hình dùng chung hạn mức gói, chuyển mô hình không bảo đảm thoát khỏi tình trạng hết hạn mức.",
       "rotation.timeout": "Giới hạn chờ output hợp lệ đầu tiên (giây)",
       "rotation.save": "Lưu bí danh và thứ tự",
       "rotation.saveNote":
@@ -993,7 +933,7 @@ const DICTIONARY = {
 
       "apikeys.create.title": "Tạo API Key cho bên gọi",
       "apikeys.create.caption":
-        "Dùng để truy cập dịch vụ B trên máy này. Mỗi ứng dụng có thể dùng một khóa riêng; tạo, bật/tắt và xoá đều có hiệu lực ngay.",
+        "Dùng để truy cập Gateway trên máy này. Mỗi ứng dụng có thể dùng một khoá riêng; tạo, bật/tắt và xoá đều có hiệu lực ngay.",
       "apikeys.create.name": "Tên",
       "apikeys.create.namePlaceholder": "Ví dụ: trợ lý ghi chú của tôi",
       "apikeys.create.value": "Key tuỳ chọn (không bắt buộc)",
@@ -1008,7 +948,7 @@ const DICTIONARY = {
       "apikeys.created.copyEnv": "Sao chép biến môi trường",
       "apikeys.list.title": "Khóa truy cập",
       "apikeys.list.caption":
-        "Quản lý quyền truy cập vào dịch vụ B. Khóa upstream của OpenCode Go vẫn nằm ở Trung tâm cấu hình.",
+        "Quản lý quyền truy cập Gateway. Khoá upstream của OpenCode Go vẫn nằm ở Trung tâm cấu hình.",
       "apikeys.list.refresh": "Làm mới danh sách",
       "apikeys.col.name": "Tên",
       "apikeys.col.tail": "Đuôi khóa",
@@ -1053,7 +993,6 @@ const DICTIONARY = {
       "account.new": "Mật khẩu mới (để trống để giữ nguyên, tối thiểu 10 ký tự)",
       "account.submit": "Cập nhật và đăng nhập lại",
 
-      "modal.eyebrow": "Giá trị nhạy cảm",
       "modal.title": "Cấu hình nhạy cảm",
       "modal.close": "Đóng",
 
@@ -1066,7 +1005,6 @@ const DICTIONARY = {
       "common.view": "Xem",
       "common.notReady": "Chưa sẵn sàng",
       "modal.revealTitle": "Xem cấu hình nhạy cảm",
-      "common.clipboard": "Trình duyệt không cho phép truy cập clipboard",
       "common.empty": "Chưa có dữ liệu",
       "common.remove": "Gỡ bỏ",
       "common.duration": "Thời gian",
@@ -1080,9 +1018,10 @@ const DICTIONARY = {
       "common.allowed": "Cho phép",
       "common.denied": "Từ chối",
       "common.unknown": "Không rõ",
-      "page.section": "Mục {0}",
 
       "error.session": "Phiên đăng nhập đã hết hạn",
+      "error.timeout": "Request quá thời gian sau {0} giây",
+      "toast.refreshFailed": "Làm mới thất bại",
 
       "state.healthy": "Khỏe",
       "state.unavailable": "Không dùng được",
@@ -1137,12 +1076,6 @@ const DICTIONARY = {
       "diag.stale": "Đã cũ",
       "diag.lastError": "Lỗi gần nhất",
       "diag.notUpdated": "Chưa cập nhật",
-      "diag.result": "Kết quả",
-      "diag.ok": "Thành công",
-      "diag.failed": "Thất bại",
-      "diag.route": "Định tuyến",
-      "diag.state": "Trạng thái",
-      "diag.noTrace": "Chưa có dữ liệu theo dõi Playground",
       "diag.streamError": "Streaming thất bại",
       "diag.clientCanceled": "Client đã huỷ",
       "diag.noRequests": "Chưa có request nào được định tuyến",
@@ -1176,11 +1109,9 @@ const DICTIONARY = {
       "apikeys.count": "{0} khóa",
       "apikeys.enabledCount": "{0} khóa đang bật",
       "apikeys.times": "lần",
-      "apikeys.rename": "Đổi tên",
       "apikeys.namePrompt": "Tên khóa",
       "apikeys.enable": "Bật",
       "apikeys.disable": "Tắt",
-      "apikeys.delete": "Xoá",
       "apikeys.confirmDelete":
         "Sau khi xoá “{0}”, các ứng dụng đang dùng khóa này sẽ không truy cập được. Xoá thật chứ?",
       "apikeys.empty": "Chưa có API Key",
@@ -1225,7 +1156,26 @@ const DICTIONARY = {
       "availability.switchManual": "Chuyển sang thủ công",
       "availability.noneEligible":
         "Danh mục mô hình hiện tại không có mô hình nào đủ điều kiện miễn phí.",
+      "availability.channel.anonymous": "Kênh ẩn danh",
+      "availability.channel.zen": "Zen Key",
+      "availability.reason.probeSucceeded": "Dò thành công",
+      "availability.reason.modelUnavailable": "Mô hình không khả dụng",
+      "availability.reason.invalidResponse": "Phản hồi không hợp lệ hoặc thiếu",
+      "availability.reason.probeTimeout": "Dò quá thời gian",
+      "availability.reason.transportError": "Lỗi mạng hoặc proxy",
+      "availability.reason.conversionError": "Chuyển đổi request thất bại",
+      "availability.reason.creationError": "Không tạo được request",
+      "availability.reason.unsupportedProbe": "Giao thức không hỗ trợ dò",
+      "availability.reason.noChannel": "Không có kênh dò khả dụng",
+      "availability.reason.notFree": "Không phải mô hình miễn phí",
+      "availability.reason.canceled": "Đã huỷ",
+      "availability.reason.manuallyEnabled": "Bật thủ công",
+      "availability.reason.autoProbe": "Dò tự động",
+      "availability.reason.legacyRecheck": "Bản ghi cũ, chờ dò lại",
+      "availability.reason.http": "HTTP {0}",
 
+      "common.unsaved":
+        "Có thay đổi chưa lưu",
       "config.restartNotice":
         "Đã lưu nhưng chưa có hiệu lực: {0}. API hiện tại {1}, WebUI {2}. Vui lòng khởi động lại tiến trình.",
       "config.revealPrompt": "Nhập lại mật khẩu quản trị",
@@ -1297,10 +1247,13 @@ export const apply = (root = document) => {
   });
 };
 
+// syncSelectors keeps the language pickers pointing at the active locale. The
+// accessible label is left to apply(): it is a translated string ("Language"),
+// not the name of the selected language, so overwriting it here made a screen
+// reader announce "简体中文" as the control's name.
 const syncSelectors = () => {
   document.querySelectorAll("[data-lang-switch]").forEach((node) => {
     node.value = locale;
-    node.setAttribute("aria-label", LABELS[locale] || lookup("lang.label") || "Language");
   });
 };
 
@@ -1352,7 +1305,7 @@ export const init = () => {
       ...SUPPORTED.map((code) => {
         const option = document.createElement("option");
         option.value = code;
-        option.textContent = FLAGS[code];
+        option.textContent = SHORT[code];
         option.setAttribute("aria-label", LABELS[code]);
         return option;
       }),

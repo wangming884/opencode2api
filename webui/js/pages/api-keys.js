@@ -230,7 +230,13 @@ function render(keys) {
               ? t("已启用", "state.enabled")
               : t("已停用", "state.disabled"),
         }),
-        el("td", { text: `${summary(usage.last_hour)} / ${summary(usage.lifetime)}` }),
+        // Two lines, in the order the header names them. Joined with "/" the
+        // cell read "0 次 · 0 tokens · $0.00 / 0 次 · 0 tokens · $0.00" and
+        // squeezed every other column in the table.
+        el("td", {}, [
+          el("div", { text: summary(usage.last_hour) }),
+          el("div", { class: "section-caption", text: summary(usage.lifetime) }),
+        ]),
         el("td", {}, [
           el("div", {
             text: t(

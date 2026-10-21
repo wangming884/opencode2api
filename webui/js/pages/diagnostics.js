@@ -286,6 +286,9 @@ function renderRouteModels() {
 }
 
 let activeTab = "playground";
+// Set by show/hide. The three-second monitor tick would otherwise redraw the
+// request ledger and the routing table into a hidden page on every beat.
+let visible = false;
 
 function renderLedger() {
   renderRequests();
@@ -330,18 +333,21 @@ export default {
     );
     $("#diagnostic-model-search").addEventListener("input", renderRouteModels);
     store.on("debug", () => {
+      if (!visible) return;
       renderModels();
       renderRoute();
     });
     store.on("monitor", () => {
+      if (!visible) return;
       renderLedger();
       renderMetadata();
     });
     store.on("lastPlayground", (value) => {
-      if (value) showResult(value);
+      if (value && visible) showResult(value);
     });
     // The module owns every string it renders, so a language switch rebuilds it.
     onChange(() => {
+      if (!visible) return;
       renderModels();
       renderLedger();
       renderMetadata();
@@ -351,6 +357,7 @@ export default {
     });
   },
   show() {
+    visible = true;
     if (!store.get("debug")) loadDebugModels();
     renderModels();
     renderLedger();
@@ -358,6 +365,7 @@ export default {
     if (activeTab === "logs") logstream.setVisible(true);
   },
   hide() {
+    visible = false;
     logstream.setVisible(false);
   },
   refresh() {

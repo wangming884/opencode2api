@@ -23,7 +23,10 @@ export function el(tag, props = {}, children = []) {
   return node;
 }
 
-export const formatNumber = (value) => Number(value || 0).toLocaleString();
+// formatNumber follows the UI language, not the browser's: a Vietnamese browser
+// showing the English console would otherwise group digits with dots while
+// every label around them is English.
+export const formatNumber = (value) => Number(value || 0).toLocaleString(dateLocale());
 
 // formatCost renders a USD amount. A real bill only needs cents, but a
 // sub-cent total must not be shown as zero, so the precision follows the
@@ -82,6 +85,33 @@ export function renderFacts(host, entries) {
   }
 }
 
+// Every open dialog pushes its close function here. The stack decides which
+// one owns the keyboard: each listener is attached to the document, and
+// stopPropagation does not silence sibling listeners on the same node, so
+// without it Escape on a stacked dialog closed every layer at once.
+const openDialogs = [];
+
+// trapFocus keeps Tab inside the dialog. Without it the browser walks into the
+// page behind the overlay, which is both confusing and unreachable by mouse.
+function trapFocus(event, dialog) {
+  const focusable = [...dialog.querySelectorAll(FOCUSABLE)].filter(
+    (node) => !node.disabled && node.offsetParent !== null,
+  );
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+const FOCUSABLE =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 // Generic dialog host; onClose fires on every close path so promise-based
 // dialogs settle exactly once.
 export function openDialog({ title, body = null, size = "", actions = [], onClose }) {
@@ -100,15 +130,20 @@ export function openDialog({ title, body = null, size = "", actions = [], onClos
   const close = () => {
     if (closed) return;
     closed = true;
+    const index = openDialogs.indexOf(close);
+    if (index >= 0) openDialogs.splice(index, 1);
     overlay.remove();
     document.removeEventListener("keydown", onKey, true);
     if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     onClose?.();
   };
   const onKey = (event) => {
+    if (openDialogs[openDialogs.length - 1] !== close) return;
     if (event.key === "Escape") {
       event.stopPropagation();
       close();
+    } else if (event.key === "Tab") {
+      trapFocus(event, dialog);
     }
   };
   if (actions.length) {
@@ -130,6 +165,7 @@ export function openDialog({ title, body = null, size = "", actions = [], onClos
     if (event.target === overlay) close();
   });
   document.addEventListener("keydown", onKey, true);
+  openDialogs.push(close);
   $("#dialog-host").append(overlay);
   const target = dialog.querySelector("input, select, textarea") || dialog.querySelector(".dialog-actions .btn");
   target?.focus();

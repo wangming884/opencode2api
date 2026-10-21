@@ -73,7 +73,7 @@
   border-color: transparent;
   background: transparent;
   appearance: none;
-  font-size: 16px;
+  font-size: var(--fs-xs);
   line-height: 1;
   text-align: center;
   cursor: pointer;
@@ -207,7 +207,11 @@ textarea {
   text-align: left;
   vertical-align: baseline;
   border-bottom: 1px solid var(--border-1);
-  overflow-wrap: anywhere;
+  /* break-word, not anywhere: `anywhere` also lowers the cell's min-content
+     width to a single character, which lets a column shrink until "Enabled"
+     becomes "Ena bled". break-word still splits a long unbroken id but keeps
+     the intrinsic width honest. */
+  overflow-wrap: break-word;
 }
 
 .table th {
@@ -215,6 +219,11 @@ textarea {
   font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-3);
+  /* Cells break anywhere so long unbroken ids cannot blow up the layout, but a
+     header must never break: applied to a label it collapses the column to one
+     character per line. Keeping headers whole also gives every column a floor,
+     so .table-wrap scrolls instead of squeezing the table flat. */
+  white-space: nowrap;
 }
 
 .table tr:last-child td {
@@ -234,6 +243,9 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  /* The badge is two or three characters; letting it wrap turned 已启用 into
+     "已启 用" whenever the surrounding table got tight. */
+  white-space: nowrap;
 }
 
 .status::before {
@@ -510,13 +522,17 @@ progress::-moz-progress-bar {
 .tabs {
   display: flex;
   gap: var(--sp-1);
-  border-bottom: 1px solid var(--border-1);
+  /* An inset shadow instead of border-bottom. The border needed a -1px margin
+     on every tab so the active underline could cover it, and that margin made
+     the strip overflow its own box by one pixel, which Chrome rendered as a
+     vertical scrollbar with two arrow buttons. */
+  box-shadow: inset 0 -1px 0 var(--border-1);
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tab {
   padding: 7px var(--sp-3) 9px;
-  margin-bottom: -1px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -546,4 +562,13 @@ progress::-moz-progress-bar {
   padding: var(--sp-3) 0;
   border-top: 1px solid var(--border-1);
   background: var(--bg);
+}
+
+/* Pinned to the left of the action row so it sits next to the save button no
+   matter which tab is open, and stays put while the form scrolls. */
+.dirty-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: var(--fs-sm);
+  color: var(--warn);
 }

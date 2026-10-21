@@ -22,6 +22,11 @@ function render() {
     )
     .slice(-500);
   const host = $("#log-list");
+  // Follow the tail only while the reader is already at it. Scrolling to the
+  // bottom unconditionally yanked the list away from anyone who had scrolled up
+  // to read an earlier event, which is exactly when the log matters most.
+  const following = host.scrollHeight - host.scrollTop - host.clientHeight < 24;
+  const offset = host.scrollTop;
   host.replaceChildren();
   rows.forEach((item) => {
     const levelClass =
@@ -37,7 +42,9 @@ function render() {
     );
   });
   if (!rows.length) host.append(el("div", { class: "empty", text: t("等待日志事件…", "logs.waiting") }));
-  host.scrollTop = host.scrollHeight;
+  // replaceChildren collapses the scroll box, so a reader who was paging through
+  // older events has to be put back where they were.
+  host.scrollTop = following ? host.scrollHeight : offset;
 }
 
 export function connect() {

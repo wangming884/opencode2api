@@ -10,6 +10,48 @@ const windows = () => [
   ["monthly", t("每月窗口", "quotas.window.month")],
 ];
 
+// Probe channels and outcomes are the gateway's internal vocabulary. The table
+// used to print them raw, so an operator read "anonymous / probe_succeeded"
+// and had to guess. Each code now has a sentence; anything this build does not
+// know yet still renders as the raw code instead of disappearing.
+const CHANNEL_LABELS = {
+  anonymous: () => t("匿名通道", "availability.channel.anonymous"),
+  zen: () => t("Zen Key", "availability.channel.zen"),
+};
+
+const REASON_LABELS = {
+  probe_succeeded: () => t("探测成功", "availability.reason.probeSucceeded"),
+  model_unavailable: () => t("模型不可用", "availability.reason.modelUnavailable"),
+  invalid_or_incomplete_response: () =>
+    t("响应无效或不完整", "availability.reason.invalidResponse"),
+  probe_timeout: () => t("探测超时", "availability.reason.probeTimeout"),
+  transport_error: () => t("网络或代理异常", "availability.reason.transportError"),
+  request_conversion_error: () => t("请求转换失败", "availability.reason.conversionError"),
+  request_creation_error: () => t("请求构造失败", "availability.reason.creationError"),
+  unsupported_probe: () => t("协议不支持探测", "availability.reason.unsupportedProbe"),
+  no_probe_channel: () => t("没有可用的探测通道", "availability.reason.noChannel"),
+  not_free: () => t("不是免费模型", "availability.reason.notFree"),
+  canceled: () => t("已取消", "availability.reason.canceled"),
+  manually_enabled: () => t("手动启用", "availability.reason.manuallyEnabled"),
+  auto_probe: () => t("自动探测", "availability.reason.autoProbe"),
+  legacy_probe_recheck: () => t("旧记录，等待复测", "availability.reason.legacyRecheck"),
+};
+
+function reasonLabel(code) {
+  if (!code) return "";
+  const status = /^http_(\d{3})$/.exec(code);
+  if (status) return t("HTTP {0}", "availability.reason.http", status[1]);
+  return REASON_LABELS[code]?.() ?? code;
+}
+
+// probeSummary joins the channel and the outcome, skipping whichever is absent
+// so a never-probed model reads as "pending" rather than " / ".
+function probeSummary(item) {
+  const channel = CHANNEL_LABELS[item.channel]?.() ?? item.channel ?? "";
+  const reason = reasonLabel(item.reason);
+  return [channel, reason].filter(Boolean).join(" · ") || t("待探测", "availability.pending");
+}
+
 let data = null;
 let timer = null;
 let loading = false;
@@ -188,11 +230,7 @@ async function loadAvailability() {
             class: item.disabled ? "warn" : "ok",
             text: item.disabled ? t("已禁用", "state.disabled") : t("已启用", "state.enabled"),
           }),
-          el("td", {
-            text:
-              [item.channel, item.reason].filter(Boolean).join(" / ") ||
-              t("待探测", "availability.pending"),
-          }),
+          el("td", { text: probeSummary(item) }),
           el("td", {
             text: item.manual
               ? t("手动", "availability.manual")

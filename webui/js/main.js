@@ -67,7 +67,10 @@ async function enterConsole(session) {
   setCsrf(session.csrf_token);
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  await loadConfig();
+  // A config read that times out must not bounce a valid session back to the
+  // login screen: the session was never in question, and the refresh button
+  // retries. Pages that need config render what they can without it.
+  await loadConfig().catch((error) => toast(error.message, true));
   await Promise.all([refreshMonitor(), loadDebugModels()]);
   clearInterval(monitorTimer);
   monitorTimer = setInterval(refreshMonitor, 3000);
@@ -99,9 +102,17 @@ $$(".nav-item").forEach((button) => {
 });
 
 $("#refresh-now").addEventListener("click", async () => {
-  await Promise.all([refreshMonitor(), loadConfig(), loadDebugModels()]);
-  await current?.refresh?.();
-  toast(i18n.t("状态已刷新", "toast.refreshed"));
+  // allSettled, not all: one endpoint failing (or timing out) used to abort the
+  // handler, so the page never refreshed and the button looked dead.
+  const results = await Promise.allSettled([refreshMonitor(), loadConfig(), loadDebugModels()]);
+  try {
+    await current?.refresh?.();
+  } catch {
+    // The page reports its own failures; the shell only reports the shared loads.
+  }
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) toast(failed.reason?.message || i18n.t("刷新失败", "toast.refreshFailed"), true);
+  else toast(i18n.t("状态已刷新", "toast.refreshed"));
 });
 
 $("#logout").addEventListener("click", async () => {

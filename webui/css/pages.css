@@ -23,6 +23,10 @@
 
 .page {
   display: grid;
+  /* minmax(0, 1fr) instead of the implicit auto column: a grid item defaults to
+     min-width: auto, so a wide table inside it pushed the whole page wider than
+     the viewport instead of scrolling inside .table-wrap. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-5);
   align-content: start;
 }
@@ -36,6 +40,7 @@
 
 .stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-5);
   align-content: start;
 }

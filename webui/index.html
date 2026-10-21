@@ -15,11 +15,11 @@
     <link rel="stylesheet" href="/css/pages.css" />
   </head>
   <body>
-    <a class="skip-link" href="#main">跳到主要内容</a>
+    <a class="skip-link" href="#main" data-i18n="a11y.skip">跳到主要内容</a>
 
     <section id="login" class="login-view">
       <form id="login-form" class="login-card">
-        <div class="login-lang"><select class="lang-switch" data-lang-switch aria-label="语言"></select></div>
+        <div class="login-lang"><select class="lang-switch" data-lang-switch aria-label="语言" data-i18n-attr="aria-label:lang.label"></select></div>
         <h1 class="login-name" data-i18n="login.title">opencode2api 控制台</h1>
         <div class="field">
           <label for="login-user" data-i18n="login.username">账号</label>
@@ -39,7 +39,7 @@
         <div class="brand">
           <span class="brand-name">opencode2api</span>
         </div>
-        <nav class="nav" aria-label="页面导航">
+        <nav class="nav" aria-label="页面导航" data-i18n-attr="aria-label:a11y.nav">
           <div class="nav-group">
             <div class="nav-group-title" data-i18n="nav.group.runtime">运行</div>
             <button class="nav-item active" data-page="overview" data-i18n="nav.overview">概览</button>
@@ -82,7 +82,7 @@
             <p id="page-sub" class="page-sub"></p>
           </div>
           <div class="topbar-actions">
-            <select class="lang-switch" data-lang-switch aria-label="语言"></select>
+            <select class="lang-switch" data-lang-switch aria-label="语言" data-i18n-attr="aria-label:lang.label"></select>
             <button id="refresh-now" class="btn btn-sm" data-i18n="topbar.refresh">刷新</button>
             <button id="logout" class="btn btn-sm btn-ghost" data-i18n="topbar.logout">退出</button>
           </div>
@@ -92,7 +92,7 @@
           <div id="restart-notice" class="notice hidden" role="status"></div>
 
           <section id="page-overview" class="page">
-            <div class="tabs" role="tablist" aria-label="概览视图">
+            <div class="tabs" role="tablist" aria-label="概览视图" data-i18n-attr="aria-label:a11y.tabs.overview">
               <button class="tab active" data-tab="summary" role="tab" aria-selected="true" data-i18n="overview.tab.summary">概览</button>
               <button class="tab" data-tab="usage" role="tab" aria-selected="false" data-i18n="overview.tab.usage">用量</button>
             </div>
@@ -252,7 +252,7 @@
           </section>
 
           <section id="page-diagnostics" class="page hidden">
-            <div class="tabs" role="tablist" aria-label="诊断视图">
+            <div class="tabs" role="tablist" aria-label="诊断视图" data-i18n-attr="aria-label:a11y.tabs.diagnostics">
               <button class="tab active" data-tab="playground" role="tab" aria-selected="true" data-i18n="diagnostics.tab.playground">请求测试</button>
               <button class="tab" data-tab="ledger" role="tab" aria-selected="false" data-i18n="diagnostics.tab.ledger">请求流水</button>
               <button class="tab" data-tab="logs" role="tab" aria-selected="false" data-i18n="diagnostics.tab.logs">事件流</button>
@@ -382,7 +382,7 @@
             </div>
             <div data-panel="logs" class="stack hidden" role="tabpanel">
               <div class="filters">
-                <select id="log-level" aria-label="日志级别">
+                <select id="log-level" aria-label="日志级别" data-i18n-attr="aria-label:a11y.logLevel">
                   <option value="" data-i18n="logs.level.all">全部级别</option>
                   <option>debug</option>
                   <option>info</option>
@@ -496,8 +496,8 @@
             <section class="section">
               <div class="section-head">
                 <div>
-                  <h2 class="section-title">为调用方创建 API Key</h2>
-                  <p class="section-caption">
+                  <h2 class="section-title" data-i18n="apikeys.create.title">为调用方创建 API Key</h2>
+                  <p class="section-caption" data-i18n="apikeys.create.caption">
                     用于访问本机 Gateway。每个应用可使用独立密钥；创建、启停和删除立即生效。
                   </p>
                 </div>
@@ -505,7 +505,7 @@
               <form id="api-key-form">
                 <div class="form-grid">
                   <div class="field">
-                    <label for="api-key-name">名称</label>
+                    <label for="api-key-name" data-i18n="apikeys.create.name">名称</label>
                     <input
                       id="api-key-name"
                       placeholder="例如：我的笔记助手"
@@ -597,7 +597,7 @@
           </section>
 
           <section id="page-model-quotas" class="page hidden">
-            <div class="tabs" role="tablist" aria-label="模型视图">
+            <div class="tabs" role="tablist" aria-label="模型视图" data-i18n-attr="aria-label:a11y.tabs.quotas">
               <button class="tab active" data-tab="quota" role="tab" aria-selected="true" data-i18n="quotas.tab.quota">套餐额度</button>
               <button class="tab" data-tab="free" role="tab" aria-selected="false" data-i18n="quotas.tab.free">免费模型</button>
             </div>
@@ -882,7 +882,7 @@
 
           <section id="page-config" class="page hidden">
             <form id="config-form" class="stack">
-              <div class="tabs" role="tablist" aria-label="配置分区">
+              <div class="tabs" role="tablist" aria-label="配置分区" data-i18n-attr="aria-label:a11y.tabs.config">
                 <button class="tab active" data-tab="service" role="tab" aria-selected="true" data-i18n="config.tab.service">服务</button>
                 <button class="tab" data-tab="keys" role="tab" aria-selected="false" data-i18n="config.tab.keys">密钥与匿名</button>
                 <button class="tab" data-tab="proxies" role="tab" aria-selected="false" data-i18n="config.tab.proxies">代理</button>
@@ -1180,6 +1180,9 @@
               </div>
 
               <div class="sticky-actions">
+                <span id="config-dirty" class="dirty-hint hidden" data-i18n="common.unsaved">
+                  有未保存的修改
+                </span>
                 <button id="reload-config" type="button" class="btn btn-sm btn-ghost" data-i18n="config.reload">
                   从磁盘重载
                 </button>

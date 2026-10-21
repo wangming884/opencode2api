@@ -25,3 +25,4 @@ coverage.out
 
 # Local agent workspace state (never part of the project)
 .workbuddy-ai/
+.playwright-mcp/
