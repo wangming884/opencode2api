@@ -1039,6 +1039,27 @@
                       <label for="c-protocols" data-i18n="config.upstream.protocols">模型协议覆盖（JSON）</label>
                       <textarea id="c-protocols" spellcheck="false">{}</textarea>
                     </div>
+                    <div class="field">
+                      <label for="c-aliases" data-i18n="config.upstream.aliases">模型别名映射（JSON）</label>
+                      <textarea
+                        id="c-aliases"
+                        spellcheck="false"
+                        placeholder='{"gpt-4o": "glm-5.3"}'
+                      ></textarea>
+                      <p class="section-caption" data-i18n="config.upstream.aliasesNote">
+                        客户端请求左边这个名字，网关实际使用右边的模型。/v1/models 也会列出左边的名字，
+                        只从列表里选模型的客户端同样能选到它。
+                      </p>
+                    </div>
+                    <div class="field">
+                      <label for="c-hidden" data-i18n="config.upstream.hidden">
+                        不在 /v1/models 中列出的模型（JSON 数组）
+                      </label>
+                      <textarea id="c-hidden" spellcheck="false" placeholder='["glm-5.3"]'></textarea>
+                      <p class="section-caption" data-i18n="config.upstream.hiddenNote">
+                        只影响发现：知道名字的客户端仍然可以直接调用。配合别名使用，对外就只剩公开的那个名字。
+                      </p>
+                    </div>
                     <div class="field full">
                       <label class="check">
                         <input id="c-free-only" type="checkbox" />

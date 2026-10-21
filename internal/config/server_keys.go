@@ -77,6 +77,17 @@ func (c Config) ServerKeyAllowsModel(id, model string) bool {
 	return false
 }
 
+// ServerKeyAllowsRequest reports whether the key may ask for the public name
+// requested, which may resolve to served. Either name in the policy admits the
+// request: an operator writing "gpt-*" means the public name, while one writing
+// the real model ID means the model itself, and both are reasonable.
+func (c Config) ServerKeyAllowsRequest(id, requested, served string) bool {
+	if c.ServerKeyAllowsModel(id, requested) {
+		return true
+	}
+	return served != requested && c.ServerKeyAllowsModel(id, served)
+}
+
 // ServerKeyEnabled reports whether key may authenticate clients. A key
 // without metadata is enabled.
 func (c Config) ServerKeyEnabled(key string) bool {

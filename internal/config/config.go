@@ -99,6 +99,16 @@ type RetryConfig struct {
 type ModelsConfig struct {
 	RefreshSeconds int               `json:"refresh_seconds"`
 	Protocols      map[string]string `json:"protocols"`
+	// Aliases maps a public model name to the model that actually serves it.
+	// A client asking for the key is routed to the value, and /v1/models
+	// advertises the key, so a client that only picks from discovery still
+	// sees the public name. This is what lets a client with a hard-coded model
+	// ID (gpt-4o, claude-3-5-sonnet) use the gateway unchanged.
+	Aliases map[string]string `json:"aliases,omitempty"`
+	// Hidden leaves model IDs out of /v1/models. Discovery only: a client that
+	// already knows a name can still request it, which is what makes an alias
+	// pair read as a single public model.
+	Hidden []string `json:"hidden,omitempty"`
 	// FreeOnly limits discovery and routing to free models, even when Zen or
 	// Go keys could serve paid ones. Free models may still fall back to keys.
 	FreeOnly bool `json:"free_only"`
@@ -347,6 +357,9 @@ func Normalize(path string, cfg Config) (Config, error) {
 		if model == "" || !wire.Valid(wire.Protocol(protocol)) {
 			return Config{}, fmt.Errorf("models.protocols contains invalid mapping %q: %q", model, protocol)
 		}
+	}
+	if err := normalizeModelAliases(&cfg); err != nil {
+		return Config{}, err
 	}
 	if err := normalizeReasoning(&cfg); err != nil {
 		return Config{}, err

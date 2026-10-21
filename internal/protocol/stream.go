@@ -246,12 +246,44 @@ func RenameStreamReader(reader io.Reader, protocol Protocol, fromName, toName st
 	}
 }
 
+// RenameStreamModel returns a reader that replaces the model name reported by
+// each SSE frame with the name the caller asked for. It is the streaming half
+// of RenameResponseModel: only frames that mention the served model are
+// decoded, so a normal stream costs one substring search per line.
+func RenameStreamModel(reader io.Reader, protocol Protocol, served, requested string) io.Reader {
+	if served == "" || requested == "" || served == requested {
+		return reader
+	}
+	return &renameStreamReader{
+		buffer:  bufio.NewReaderSize(reader, 64<<10),
+		renamer: &streamModelRenamer{protocol: protocol, served: served, requested: requested},
+	}
+}
+
+// streamModelRenamer rewrites the model field of one protocol's SSE frames.
+// The value is complete in every frame that carries it, so no cross-frame
+// state is needed.
+type streamModelRenamer struct {
+	protocol          Protocol
+	served, requested string
+}
+
+func (renamer *streamModelRenamer) rewriteFrame(raw string) []byte {
+	return RenameResponseModel([]byte(raw), renamer.protocol, renamer.served, renamer.requested)
+}
+
+// frameRenamer rewrites one SSE data payload and returns the bytes to send,
+// which may be the original slice when nothing needed to change.
+type frameRenamer interface {
+	rewriteFrame(raw string) []byte
+}
+
 // renameStreamReader is the io.Reader RenameStreamReader returns: it reads the
 // upstream stream line by line, rewrites the data lines that need it, and
 // serves the rewritten bytes, carrying an error over to the next Read.
 type renameStreamReader struct {
 	buffer  *bufio.Reader
-	renamer *streamToolRenamer
+	renamer frameRenamer
 	pending []byte
 	err     error
 }

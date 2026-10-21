@@ -503,6 +503,57 @@ func ResponseUsage(protocol Protocol, body []byte) (Usage, bool) {
 	return decodeOpenAIUsage(usage), true
 }
 
+// RenameResponseModel replaces the model name a response reports with the name
+// the caller asked for. models.aliases routes a public name to another model;
+// echoing the target would disclose it, so the caller sees the name it used.
+// The bytes.Contains check is only a fast path: a frame that cannot mention the
+// target is returned untouched without decoding it.
+func RenameResponseModel(body []byte, protocol Protocol, served, requested string) []byte {
+	if served == "" || requested == "" || served == requested || len(body) == 0 {
+		return body
+	}
+	if !bytes.Contains(body, []byte(served)) {
+		return body
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body
+	}
+	if !renameModelInMap(payload, protocol, served, requested) {
+		return body
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
+// renameModelInMap rewrites every place a protocol reports the model name and
+// reports whether anything changed. Chat and Responses put it at the top level
+// of the document (Responses also wraps one under "response" in stream
+// events), and an Anthropic message_start nests it under "message".
+func renameModelInMap(payload map[string]any, protocol Protocol, served, requested string) bool {
+	changed := false
+	if jsonutil.StringAt(payload, "model") == served {
+		payload["model"] = requested
+		changed = true
+	}
+	switch protocol {
+	case Responses:
+		if response, ok := payload["response"].(map[string]any); ok && jsonutil.StringAt(response, "model") == served {
+			response["model"] = requested
+			changed = true
+		}
+	case Anthropic:
+		if message, ok := payload["message"].(map[string]any); ok && jsonutil.StringAt(message, "model") == served {
+			message["model"] = requested
+			changed = true
+		}
+	}
+	return changed
+}
+
 // RenameResponseTool rewrites tool call names matching fromName to toName inside
 // a serialized JSON response or SSE event data object for the given protocol.
 // It is used to restore a client's original read-related tool name (e.g.

@@ -45,6 +45,26 @@ function secretInputs(name) {
 
 const numberValue = (selector) => Number($(selector).value);
 
+// jsonField reads a textarea holding JSON. An empty box means "nothing
+// configured"; a wrong container type is caught here so the toast names the
+// field instead of echoing a Go unmarshal error.
+function jsonField(selector, wantArray) {
+  const raw = $(selector).value.trim();
+  if (!raw) return wantArray ? [] : {};
+  const parsed = JSON.parse(raw);
+  const ok = wantArray
+    ? Array.isArray(parsed)
+    : parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+  if (!ok) {
+    throw new Error(
+      wantArray
+        ? t('需要一个 JSON 数组，例如 ["glm-5.3"]', "config.jsonArray")
+        : t('需要一个 JSON 对象，例如 {"gpt-4o": "glm-5.3"}', "config.jsonObject"),
+    );
+  }
+  return parsed;
+}
+
 // fillConfig rewrites every field, so it must not run while the operator has
 // unsaved edits. The topbar refresh calls loadConfig(), which pushes a new
 // config into the store; before this guard, pressing refresh while filling in
@@ -73,6 +93,8 @@ function fillConfig(value) {
   $("#c-timeout").value = value.retry.timeout_seconds;
   $("#c-refresh").value = value.models.refresh_seconds;
   $("#c-protocols").value = JSON.stringify(value.models.protocols || {}, null, 2);
+  $("#c-aliases").value = JSON.stringify(value.models.aliases || {}, null, 2);
+  $("#c-hidden").value = JSON.stringify(value.models.hidden || [], null, 2);
   $("#c-free-only").checked = !!value.models.free_only;
   const reasoning = value.reasoning || {};
   $("#c-reasoning-effort").value = reasoning.effort || "";
@@ -111,6 +133,8 @@ async function save(event) {
       models: {
         refresh_seconds: numberValue("#c-refresh"),
         protocols: JSON.parse($("#c-protocols").value || "{}"),
+        aliases: jsonField("#c-aliases", false),
+        hidden: jsonField("#c-hidden", true),
         free_only: $("#c-free-only").checked,
       },
       reasoning: {

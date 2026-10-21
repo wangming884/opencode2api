@@ -225,6 +225,31 @@ The gateway refreshes Zen/Go `/v1/models` and OpenCode's [capability catalog](ht
 
 Allowed protocol values are `chat`, `responses`, and `anthropic`. Models using unsupported native protocols are filtered from discovery unless overridden.
 
+### Model aliases
+
+Most clients hard-code model IDs in their own settings, and a gateway that only accepts the upstream catalog names cannot be dropped into one unchanged. `models.aliases` maps a public name to the model that serves it:
+
+```json
+{
+  "models": {
+    "aliases": {
+      "gpt-4o": "glm-5.3",
+      "claude-3-5-sonnet": "glm-5.3",
+      "fast": "sota"
+    },
+    "hidden": ["glm-5.3"]
+  }
+}
+```
+
+A request for `gpt-4o` is routed, priced, and counted as `glm-5.3`; the caller only ever names `gpt-4o`. Chains resolve in order (`claude-3-5-sonnet` → `gpt-4o` → `glm-5.3`), and a target may be a rotation group alias such as `sota`, so a public name can inherit the whole failover walk. A loop, a name mapped to itself, and a name that reuses a rotation alias are all rejected at load time.
+
+`/v1/models` advertises each alias with the metadata of the model behind it, so a client that only picks from discovery sees the public name and the right context window. The target stays listed unless it is named in `models.hidden`, which filters discovery only — a client that already knows the name can still call it. Together the two settings leave exactly one visible name per model.
+
+A server key's `models` allow-list matches either name: `"gpt-*"` admits the public pattern, and listing the real model ID admits every alias that resolves to it. Requests that fail after resolution report both names, so a stale alias does not read like a gateway bug.
+
+Aliases are also applied to `/v1/embeddings` and to the verbatim System One relay, where the request bytes are re-encoded with the target name rather than only the parsed payload.
+
 Cost, deprecation, and model limits come from the official [OpenCode metadata endpoint](https://models.opencode.ai/api.json), refreshed every 24 hours. OpenCode's capability catalog remains authoritative for context and token limits; metadata `limit.context`, `limit.input`, and `limit.output` fill fields missing from that catalog. These limits are exposed by `/v1/models` as `context_window`/`context_length`, `max_input`, and `max_output` for discovery clients such as CLIProxyAPI and Pi. Metadata requests use a 30-second timeout per HTTP client. Refresh failures retain existing data.
 
 Each `/v1/models` entry also carries `cost` (USD per million tokens: `input`, `output`, `cache_read`, `cache_write`, plus OpenClaw's `cacheRead`/`cacheWrite`) when the metadata states a price. Reasoning models list their levels in `reasoning_efforts` and in OpenClaw's `compat.supportedReasoningEfforts`: `minimal` through `max`, capped at the probed ceiling when the model's effort is `auto`. A forced or probed level is reported as `default_reasoning_effort`. Cache prices appear after the next metadata refresh.

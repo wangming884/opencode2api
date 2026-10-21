@@ -239,6 +239,15 @@ const DICTIONARY = {
       "config.upstream.timeout": "Request timeout (seconds)",
       "config.upstream.refresh": "Model refresh interval (seconds)",
       "config.upstream.protocols": "Model protocol overrides (JSON)",
+      "config.upstream.aliases": "Model aliases (JSON)",
+      "config.upstream.aliasesNote":
+        "The client asks for the name on the left; the gateway serves the model on the right. "
+        + "/v1/models also lists the left-hand name, so a client that only picks from the list can still reach it.",
+      "config.upstream.hidden": "Models to leave out of /v1/models (JSON array)",
+      "config.upstream.hiddenNote":
+        "Discovery only: a client that knows the name can still call it. Pair it with an alias to leave just the public name visible.",
+      "config.jsonObject": 'Expected a JSON object such as {"gpt-4o": "glm-5.3"}',
+      "config.jsonArray": 'Expected a JSON array such as ["glm-5.3"]',
       "config.reasoning.title": "Thinking effort",
       "config.reasoning.caption":
         "Applied only when the client does not specify an effort; per-model overrides take priority. Choosing “Off” removes reasoning for requests that do not ask for it.",
@@ -825,6 +834,15 @@ const DICTIONARY = {
       "config.upstream.timeout": "Timeout của request (giây)",
       "config.upstream.refresh": "Làm mới mô hình (giây)",
       "config.upstream.protocols": "Ghi đè giao thức mô hình (JSON)",
+      "config.upstream.aliases": "Bí danh mô hình (JSON)",
+      "config.upstream.aliasesNote":
+        "Client yêu cầu tên bên trái, gateway phục vụ mô hình bên phải. /v1/models cũng liệt kê tên bên trái, "
+        + "nên client chỉ chọn từ danh sách vẫn dùng được.",
+      "config.upstream.hidden": "Mô hình không liệt kê trong /v1/models (mảng JSON)",
+      "config.upstream.hiddenNote":
+        "Chỉ ảnh hưởng việc khám phá: client biết tên vẫn gọi được. Kết hợp với bí danh để chỉ còn tên công khai.",
+      "config.jsonObject": 'Cần một object JSON, ví dụ {"gpt-4o": "glm-5.3"}',
+      "config.jsonArray": 'Cần một mảng JSON, ví dụ ["glm-5.3"]',
       "config.reasoning.title": "Cường độ Thinking",
       "config.reasoning.caption":
         "Chỉ áp dụng khi client không chỉ định rõ; có thể ghi đè theo từng mô hình. Chọn “Tắt” sẽ bỏ reasoning cho các request không yêu cầu rõ.",

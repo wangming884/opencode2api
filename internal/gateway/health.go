@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"slices"
+	"sort"
 	"time"
 
 	"opencode2api/internal/buildinfo"
@@ -141,87 +142,21 @@ func (g *Gateway) reasoningEfforts(model string, route modelcatalog.Route) []str
 
 // handleModels lists every servable model with its tier-scoped metadata in
 // the OpenAI list shape, plus, when Go keys are configured, one entry per
-// rotation group alias that has a Go-routable model.
+// rotation group alias that has a Go-routable model, plus one entry per
+// models.aliases public name whose target is servable. Models listed in
+// models.hidden are left out.
 func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 	now := time.Now().Unix()
 	routes, _ := g.availableModels()
 	data := make([]map[string]any, 0, len(routes))
 	for _, route := range routes {
-		model := route.ID
-		// Tier-scoped metadata: the advertised context window must match
-		// the tier that will serve the request (anonymous ⇒ Zen).
-		md := g.catalog.MetadataForTier(model, route.Tier)
-		entry := map[string]any{
-			"id": model, "object": "model", "created": now, "owned_by": "opencode",
-			"metadata":        md,
-			"native_protocol": route.Protocol,
+		if g.cfg.Models.Hides(route.ID) {
+			continue
 		}
-		if route.Protocol == wire.SystemOne {
-			entry["supported_endpoints"] = []string{"/v1/systemone"}
-		} else if isEmbeddingModel(model) && g.cfg.Embeddings.Enabled {
-			// An embedding model is not a chat model, so advertising the
-			// message endpoints for it would be misleading. The relay accepts
-			// any ID either way; this only shapes discovery. While the relay
-			// is off the endpoint answers 404, so it is not advertised at all.
-			entry["supported_endpoints"] = []string{"/v1/embeddings"}
-		} else {
-			entry["supported_endpoints"] = []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"}
-		}
-		// Top-level OpenAI-standard fields: discovery clients (jcode, Pi, …)
-		// read context/reasoning at the top level of each model entry.
-		if md.ContextWindow > 0 {
-			entry["context_window"] = md.ContextWindow
-			entry["context_length"] = md.ContextWindow
-		}
-		if md.MaxInput > 0 {
-			entry["max_input"] = md.MaxInput
-		}
-		if md.MaxOutput > 0 {
-			entry["max_output"] = md.MaxOutput
-		}
-		if md.Reasoning {
-			entry["reasoning"] = true
-			entry["supports_reasoning"] = true
-			efforts := g.reasoningEfforts(model, route)
-			entry["reasoning_efforts"] = efforts
-			// OpenClaw and similar harnesses read effort levels from compat
-			// rather than inferring them, and otherwise offer only off/max.
-			entry["compat"] = map[string]any{"supportsReasoningEffort": true, "supportedReasoningEfforts": efforts}
-			if effort := g.resolvedEffort(model, route.Tier, route.Protocol); effort != "" && effort != "none" {
-				entry["default_reasoning_effort"] = effort
-			}
-		}
-		if md.Cost != nil {
-			cost := map[string]any{}
-			// Camel-case aliases match OpenClaw's model cost shape.
-			for _, field := range []struct {
-				names []string
-				value *float64
-			}{
-				{[]string{"input"}, md.Cost.Input},
-				{[]string{"output"}, md.Cost.Output},
-				{[]string{"cache_read", "cacheRead"}, md.Cost.CacheRead},
-				{[]string{"cache_write", "cacheWrite"}, md.Cost.CacheWrite},
-			} {
-				if field.value == nil {
-					continue
-				}
-				for _, name := range field.names {
-					cost[name] = *field.value
-				}
-			}
-			entry["cost"] = cost
-		}
-		if md.ToolCall {
-			entry["tool_call"] = true
-		}
-		if md.StructuredOutput {
-			entry["structured_output"] = true
-		}
-		data = append(data, entry)
+		data = append(data, g.modelEntry(now, route.ID, route))
 	}
 	for _, group := range g.rotation.Snapshot().Groups {
-		if g.goNodes.Len() == 0 {
+		if g.goNodes.Len() == 0 || g.cfg.Models.Hides(group.Alias) {
 			continue
 		}
 		available := false
@@ -236,5 +171,123 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 		}
 		data = append(data, map[string]any{"id": group.Alias, "object": "model", "created": now, "owned_by": "opencode-go-rotation"})
 	}
+	data = append(data, g.aliasEntries(now)...)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+// aliasEntries advertises the public names from models.aliases under the
+// metadata of the model that serves them, so a client that only picks from
+// discovery can still address the public name. An alias whose target is not
+// servable right now is left out rather than advertised as broken.
+func (g *Gateway) aliasEntries(now int64) []map[string]any {
+	if len(g.cfg.Models.Aliases) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(g.cfg.Models.Aliases))
+	for name := range g.cfg.Models.Aliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entries := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		if g.cfg.Models.Hides(name) {
+			continue
+		}
+		target := g.cfg.ResolveModel(name)
+		if target == name {
+			continue
+		}
+		// An alias may point at a rotation group, which has no single route:
+		// advertise it the way the group itself is advertised.
+		if g.rotation.GroupID(target) != "" {
+			if g.goNodes.Len() > 0 {
+				entries = append(entries, map[string]any{"id": name, "object": "model", "created": now, "owned_by": "opencode-go-rotation"})
+			}
+			continue
+		}
+		route, err := g.catalog.Route(target, g.zenNodes.Len() > 0, g.goNodes.Len() > 0, g.cfg.Anonymous)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, g.modelEntry(now, name, route))
+	}
+	return entries
+}
+
+// modelEntry builds one discovery entry. id is the advertised name, which may
+// be an alias; route is the model that will actually serve it, so metadata and
+// reasoning levels always describe the model that answers.
+func (g *Gateway) modelEntry(now int64, id string, route modelcatalog.Route) map[string]any {
+	model := route.ID
+	// Tier-scoped metadata: the advertised context window must match
+	// the tier that will serve the request (anonymous ⇒ Zen).
+	md := g.catalog.MetadataForTier(model, route.Tier)
+	entry := map[string]any{
+		"id": id, "object": "model", "created": now, "owned_by": "opencode",
+		"metadata":        md,
+		"native_protocol": route.Protocol,
+	}
+	if route.Protocol == wire.SystemOne {
+		entry["supported_endpoints"] = []string{"/v1/systemone"}
+	} else if isEmbeddingModel(model) && g.cfg.Embeddings.Enabled {
+		// An embedding model is not a chat model, so advertising the
+		// message endpoints for it would be misleading. The relay accepts
+		// any ID either way; this only shapes discovery. While the relay
+		// is off the endpoint answers 404, so it is not advertised at all.
+		entry["supported_endpoints"] = []string{"/v1/embeddings"}
+	} else {
+		entry["supported_endpoints"] = []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"}
+	}
+	// Top-level OpenAI-standard fields: discovery clients (jcode, Pi, …)
+	// read context/reasoning at the top level of each model entry.
+	if md.ContextWindow > 0 {
+		entry["context_window"] = md.ContextWindow
+		entry["context_length"] = md.ContextWindow
+	}
+	if md.MaxInput > 0 {
+		entry["max_input"] = md.MaxInput
+	}
+	if md.MaxOutput > 0 {
+		entry["max_output"] = md.MaxOutput
+	}
+	if md.Reasoning {
+		entry["reasoning"] = true
+		entry["supports_reasoning"] = true
+		efforts := g.reasoningEfforts(model, route)
+		entry["reasoning_efforts"] = efforts
+		// OpenClaw and similar harnesses read effort levels from compat
+		// rather than inferring them, and otherwise offer only off/max.
+		entry["compat"] = map[string]any{"supportsReasoningEffort": true, "supportedReasoningEfforts": efforts}
+		if effort := g.resolvedEffort(model, route.Tier, route.Protocol); effort != "" && effort != "none" {
+			entry["default_reasoning_effort"] = effort
+		}
+	}
+	if md.Cost != nil {
+		cost := map[string]any{}
+		// Camel-case aliases match OpenClaw's model cost shape.
+		for _, field := range []struct {
+			names []string
+			value *float64
+		}{
+			{[]string{"input"}, md.Cost.Input},
+			{[]string{"output"}, md.Cost.Output},
+			{[]string{"cache_read", "cacheRead"}, md.Cost.CacheRead},
+			{[]string{"cache_write", "cacheWrite"}, md.Cost.CacheWrite},
+		} {
+			if field.value == nil {
+				continue
+			}
+			for _, name := range field.names {
+				cost[name] = *field.value
+			}
+		}
+		entry["cost"] = cost
+	}
+	if md.ToolCall {
+		entry["tool_call"] = true
+	}
+	if md.StructuredOutput {
+		entry["structured_output"] = true
+	}
+	return entry
 }

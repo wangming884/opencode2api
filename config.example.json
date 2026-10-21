@@ -18,6 +18,11 @@
   "models": {
     "refresh_seconds": 300,
     "protocols": {},
+    // Public name -> the model that serves it. A client asking for "gpt-4o" is
+    // routed to "glm-5.3"; /v1/models advertises the public name.
+    "aliases": {},
+    // Models to leave out of /v1/models. Discovery only: a known name still works.
+    "hidden": [],
     "free_only": false
   },
   "performance": {

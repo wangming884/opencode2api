@@ -81,7 +81,9 @@ type groupAttempt struct {
 }
 
 // handleRotation serves a request addressed to a rotation group alias on the
-// Go tier. It walks the group's usable models from the current one, giving
+// Go tier. alias is the name the caller used — the group alias itself, or the
+// public name that resolved to it — and it is what the reply reports. It walks
+// the group's usable models from the current one, giving
 // each up to three single-call attempts. A quota or rate-limit failure pauses
 // the model for its Retry-After (60 seconds without one) and moves on to the
 // next model; a model that fails a third time for another reason is paused
@@ -99,7 +101,12 @@ func (g *Gateway) handleRotation(w http.ResponseWriter, r *http.Request, externa
 	if meta != nil {
 		meta.Request = ids.Request
 		meta.Session = ids.Session
-		meta.ModelAlias = alias
+		// A public alias from models.aliases is the more useful label here: the
+		// group alias and the model actually tried are both in the attempt log
+		// below, while the public name is what the caller asked for.
+		if meta.ModelAlias == "" {
+			meta.ModelAlias = alias
+		}
 	}
 	visited := map[string]bool{}
 	ordinaryModels, total := 0, 0

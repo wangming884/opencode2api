@@ -301,6 +301,30 @@ func callerScope(ctx context.Context) string {
 	return caller
 }
 
+// aliasRouteError names the public model when a routing failure was caused by
+// what it resolves to. Without it the caller reads about a model ID they never
+// sent, which looks like a gateway bug rather than a stale alias.
+func aliasRouteError(requested, served, reason string) string {
+	if requested == served {
+		return reason
+	}
+	return fmt.Sprintf("model %q is aliased to %q: %s", requested, served, reason)
+}
+
+// rewriteModelBody returns body with its model field replaced. The decoder
+// keeps numbers as literals, so a large integer (seed, timestamp) survives the
+// round trip instead of being re-encoded as a float.
+func rewriteModelBody(body []byte, model string) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("request body must be a JSON object: %w", err)
+	}
+	doc["model"] = model
+	return json.Marshal(doc)
+}
+
 // handleInference serves a message endpoint whose wire protocol is external.
 // A rotation group alias is handed to handleRotation. Any other model is
 // routed through the catalog, encoded per upstream tier, sent through
@@ -353,20 +377,34 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			wire.WriteError(w, external, http.StatusBadRequest, "model is required", "invalid_request_error", "model")
 			return
 		}
-		if !g.cfg.ServerKeyAllowsModel(callerScope(r.Context()), model) {
+		// models.aliases maps a public name to the model that serves it. The
+		// public name is what the caller is billed and logged under; the target
+		// is what routing, pricing, reasoning overrides and the upstream see.
+		requested := model
+		if target := g.cfg.ResolveModel(model); target != model {
+			model = target
+			payload["model"] = target
+			if meta != nil {
+				meta.ModelAlias = requested
+				meta.Model = target
+			}
+		}
+		if !g.cfg.ServerKeyAllowsRequest(callerScope(r.Context()), requested, model) {
 			// The key policy refused this model, not the caller's payload, so
 			// the request gives its rate slot back instead of spending the
 			// quota on requests that can never succeed.
 			g.limiter.Release(callerScope(r.Context()))
-			wire.WriteError(w, external, http.StatusForbidden, fmt.Sprintf("model %q is not allowed for this API key", model), "permission_error", "model")
+			wire.WriteError(w, external, http.StatusForbidden, fmt.Sprintf("model %q is not allowed for this API key", requested), "permission_error", "model")
 			return
 		}
 		if id := g.rotation.GroupID(model); id != "" {
-			g.handleRotation(w, r, external, payload, id, model)
+			// The public name is what the reply must report, so an alias that
+			// points at a group is not disclosed as the group either.
+			g.handleRotation(w, r, external, payload, id, requested)
 			return
 		}
 		if !g.catalog.Supported(model) {
-			wire.WriteError(w, external, http.StatusBadRequest, "the model uses an upstream protocol that opencode2api does not expose", "invalid_request_error", "model")
+			wire.WriteError(w, external, http.StatusBadRequest, aliasRouteError(requested, model, "the model uses an upstream protocol that opencode2api does not expose"), "invalid_request_error", "model")
 			return
 		}
 		route, err := g.catalog.Route(model, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous)
@@ -376,7 +414,7 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			route, err = g.catalog.RouteForTier(model, override.Tier, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0)
 		}
 		if err != nil {
-			wire.WriteError(w, external, http.StatusBadRequest, err.Error(), "invalid_request_error", "model")
+			wire.WriteError(w, external, http.StatusBadRequest, aliasRouteError(requested, model, err.Error()), "invalid_request_error", "model")
 			return
 		}
 		if meta != nil {
@@ -393,7 +431,18 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 				wire.WriteError(w, external, http.StatusBadRequest, "this model uses System One decisions, not chat; send state and typed questions to /v1/systemone", "invalid_request_error", "model")
 				return
 			}
-			g.forwardSystemOne(w, r, body, payload, model, route)
+			// The relay is verbatim, so an alias has to be applied to the bytes
+			// themselves; the message endpoints re-encode from payload instead.
+			relayBody := body
+			if requested != model {
+				rewritten, rewriteErr := rewriteModelBody(body, model)
+				if rewriteErr != nil {
+					wire.WriteError(w, external, http.StatusBadRequest, rewriteErr.Error(), "invalid_request_error", "model")
+					return
+				}
+				relayBody = rewritten
+			}
+			g.forwardSystemOne(w, r, relayBody, payload, model, route)
 			return
 		}
 		bodies, err := g.prepareRouteBodies(external, route, payload)
@@ -449,6 +498,12 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			meta.Protocol = upstreamRoute.Protocol
 		}
 		w.Header().Set("x-request-id", ids.Request)
+		if requested != model {
+			// The caller asked for a public name; naming the model that served
+			// it in a header keeps the alias invisible without hiding the truth
+			// from an operator reading the response.
+			w.Header().Set("X-Resolved-Model", model)
+		}
 		if resp.StatusCode/100 != 2 {
 			copyErrorResponse(w, external, resp, ids.Request)
 			return
@@ -471,9 +526,13 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			var usage wire.Usage
 			var usageReported bool
 			if external == upstreamRoute.Protocol {
-				usage, usageReported, err = wire.ForwardStream(r.Context(), w, streamBody, upstreamRoute.Protocol, model)
+				// A same-protocol stream is copied verbatim, so the alias has to
+				// be rewritten frame by frame on the way out.
+				usage, usageReported, err = wire.ForwardStream(r.Context(), w, wire.RenameStreamModel(streamBody, upstreamRoute.Protocol, model, requested), upstreamRoute.Protocol, model)
 			} else {
-				usage, usageReported, err = wire.TranscodeStream(r.Context(), w, streamBody, upstreamRoute.Protocol, external, model)
+				// The transcoder builds every frame itself and stamps the model
+				// it is given, so it emits the public name directly.
+				usage, usageReported, err = wire.TranscodeStream(r.Context(), w, streamBody, upstreamRoute.Protocol, external, requested)
 			}
 			if meta != nil {
 				meta.Usage, meta.UsageReported = usage, usageReported
@@ -519,6 +578,9 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 				return
 			}
 		}
+		// The body names the model that answered; report the name the caller
+		// asked for instead, matching what the rotation path already does.
+		responseBody = wire.RenameResponseModel(responseBody, external, model, requested)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(responseBody)

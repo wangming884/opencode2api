@@ -73,9 +73,27 @@ func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, "input is required", "invalid_request_error", "input")
 		return
 	}
-	if !g.cfg.ServerKeyAllowsModel(callerScope(r.Context()), model) {
+	// models.aliases applies here too: a client with a hard-coded embedding
+	// model ID should reach the configured one. This endpoint relays the body
+	// verbatim, so the alias is applied to the bytes, not only to the payload.
+	requested := model
+	if target := g.cfg.ResolveModel(model); target != model {
+		model = target
+		payload["model"] = target
+		rewritten, err := rewriteModelBody(body, target)
+		if err != nil {
+			wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, err.Error(), "invalid_request_error", "model")
+			return
+		}
+		body = rewritten
+		if meta != nil {
+			meta.ModelAlias = requested
+			meta.Model = target
+		}
+	}
+	if !g.cfg.ServerKeyAllowsRequest(callerScope(r.Context()), requested, model) {
 		g.limiter.Release(callerScope(r.Context()))
-		wire.WriteError(w, wire.Embeddings, http.StatusForbidden, fmt.Sprintf("model %q is not allowed for this API key", model), "permission_error", "model")
+		wire.WriteError(w, wire.Embeddings, http.StatusForbidden, fmt.Sprintf("model %q is not allowed for this API key", requested), "permission_error", "model")
 		return
 	}
 	defer g.finishRequest(r)
@@ -94,15 +112,15 @@ func (g *Gateway) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	requestCtx, cancel := context.WithTimeout(r.Context(), time.Duration(g.cfg.Retry.TimeoutSeconds)*time.Second)
 	defer cancel()
 	if g.cfg.Embeddings.BaseURL != "" {
-		g.forwardExternalEmbeddings(w, r, requestCtx, body, model, ids, meta)
+		g.forwardExternalEmbeddings(w, r, requestCtx, body, model, requested, ids, meta)
 		return
 	}
-	g.forwardPoolEmbeddings(w, r, requestCtx, body, model, ids, meta)
+	g.forwardPoolEmbeddings(w, r, requestCtx, body, model, requested, ids, meta)
 }
 
 // forwardPoolEmbeddings relays an embeddings request through the Zen/Go key
 // pools, with the usual tier fallback and key rotation.
-func (g *Gateway) forwardPoolEmbeddings(w http.ResponseWriter, r *http.Request, ctx context.Context, body []byte, model string, ids identity.RequestIDs, meta *telemetry.RequestMeta) {
+func (g *Gateway) forwardPoolEmbeddings(w http.ResponseWriter, r *http.Request, ctx context.Context, body []byte, model, requested string, ids identity.RequestIDs, meta *telemetry.RequestMeta) {
 	route, err := g.embeddingsRoute(model)
 	if err != nil {
 		wire.WriteError(w, wire.Embeddings, http.StatusBadRequest, err.Error(), "invalid_request_error", "model")
@@ -127,14 +145,14 @@ func (g *Gateway) forwardPoolEmbeddings(w http.ResponseWriter, r *http.Request, 
 	if meta != nil {
 		meta.Tier = string(upstreamRoute.Tier)
 	}
-	g.writeEmbeddingsResponse(w, resp, ids, meta)
+	g.writeEmbeddingsResponse(w, resp, model, requested, ids, meta)
 }
 
 // forwardExternalEmbeddings relays an embeddings request to the dedicated
 // origin from embeddings.base_url. There is no key pool there, so the retry
 // budget applies to that one endpoint: a transport failure, a rate limit or a
 // server error is retried, and any other answer is final.
-func (g *Gateway) forwardExternalEmbeddings(w http.ResponseWriter, r *http.Request, ctx context.Context, body []byte, model string, ids identity.RequestIDs, meta *telemetry.RequestMeta) {
+func (g *Gateway) forwardExternalEmbeddings(w http.ResponseWriter, r *http.Request, ctx context.Context, body []byte, model, requested string, ids identity.RequestIDs, meta *telemetry.RequestMeta) {
 	if meta != nil {
 		meta.Tier = externalEmbeddingsChannel
 	}
@@ -176,7 +194,7 @@ func (g *Gateway) forwardExternalEmbeddings(w http.ResponseWriter, r *http.Reque
 		resp, err := doInferenceAttempt(proxy.client, req, 0, g.attemptTimeout)
 		g.recordUpstreamAttempt(ctx, route, ids, attempt, externalEmbeddingsChannel, externalEmbeddingsChannel, false, proxy, resp, err, time.Since(started))
 		if err == nil && (resp.StatusCode/100 == 2 || !retryableEmbeddingStatus(resp.StatusCode)) {
-			g.writeEmbeddingsResponse(w, resp, ids, meta)
+			g.writeEmbeddingsResponse(w, resp, model, requested, ids, meta)
 			return
 		}
 		if resp != nil {
@@ -189,7 +207,7 @@ func (g *Gateway) forwardExternalEmbeddings(w http.ResponseWriter, r *http.Reque
 		g.logger.Debug("embeddings upstream attempt failed", "component", "upstream", "event", "embeddings_attempt_failed", "request_id", ids.Request, "attempt", attempt, "endpoint", config.RedactURL(endpoint), "error", err)
 	}
 	if lastResponse != nil {
-		g.writeEmbeddingsResponse(w, lastResponse, ids, meta)
+		g.writeEmbeddingsResponse(w, lastResponse, model, requested, ids, meta)
 		return
 	}
 	g.writeEmbeddingsFailure(w, r, ctx, lastErr, ids, meta, externalTier)
@@ -198,7 +216,7 @@ func (g *Gateway) forwardExternalEmbeddings(w http.ResponseWriter, r *http.Reque
 // writeEmbeddingsResponse relays an upstream answer: a 2xx body is buffered so
 // token usage can be recorded, and an error status keeps the upstream's own
 // error envelope instead of being rewritten.
-func (g *Gateway) writeEmbeddingsResponse(w http.ResponseWriter, resp *http.Response, ids identity.RequestIDs, meta *telemetry.RequestMeta) {
+func (g *Gateway) writeEmbeddingsResponse(w http.ResponseWriter, resp *http.Response, model, requested string, ids identity.RequestIDs, meta *telemetry.RequestMeta) {
 	defer resp.Body.Close()
 	w.Header().Set("x-request-id", ids.Request)
 	if resp.StatusCode/100 != 2 {
@@ -218,6 +236,12 @@ func (g *Gateway) writeEmbeddingsResponse(w http.ResponseWriter, resp *http.Resp
 	}
 	if usage, reported := wire.ResponseUsage(wire.Embeddings, responseBody); meta != nil {
 		meta.Usage, meta.UsageReported = usage, reported
+	}
+	if requested != model {
+		// An aliased embedding model reports the public name, like the message
+		// endpoints do; the real one goes in the header for operators.
+		responseBody = wire.RenameResponseModel(responseBody, wire.Embeddings, model, requested)
+		w.Header().Set("X-Resolved-Model", model)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
