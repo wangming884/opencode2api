@@ -150,7 +150,10 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 	routes, _ := g.availableModels()
 	data := make([]map[string]any, 0, len(routes))
 	for _, route := range routes {
-		if g.cfg.Models.Hides(route.ID) {
+		// An alias that shadows a real model ID is emitted below instead, with
+		// the metadata of the model that actually answers. Listing both would
+		// advertise one ID twice with different limits.
+		if g.cfg.Models.Hides(route.ID) || g.cfg.Aliased(route.ID) {
 			continue
 		}
 		data = append(data, g.modelEntry(now, route.ID, route))

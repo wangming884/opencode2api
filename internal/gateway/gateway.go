@@ -311,6 +311,19 @@ func aliasRouteError(requested, served, reason string) string {
 	return fmt.Sprintf("model %q is aliased to %q: %s", requested, served, reason)
 }
 
+// unavailableMessage explains a model the catalog cannot serve. A model ID the
+// catalog has never seen is a different problem from one it knows and cannot
+// speak the protocol of, and only the first is fixed by checking the spelling.
+func (g *Gateway) unavailableMessage(requested, served string) string {
+	if g.catalog.Known(served) {
+		return aliasRouteError(requested, served, "the model uses an upstream protocol that opencode2api does not expose")
+	}
+	if requested != served {
+		return fmt.Sprintf("model %q is aliased to %q, which is not offered by the configured Zen or Go pools", requested, served)
+	}
+	return fmt.Sprintf("model %q is not offered by the configured Zen or Go pools", served)
+}
+
 // rewriteModelBody returns body with its model field replaced. The decoder
 // keeps numbers as literals, so a large integer (seed, timestamp) survives the
 // round trip instead of being re-encoded as a float.
@@ -404,7 +417,7 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 			return
 		}
 		if !g.catalog.Supported(model) {
-			wire.WriteError(w, external, http.StatusBadRequest, aliasRouteError(requested, model, "the model uses an upstream protocol that opencode2api does not expose"), "invalid_request_error", "model")
+			wire.WriteError(w, external, http.StatusBadRequest, g.unavailableMessage(requested, model), "invalid_request_error", "model")
 			return
 		}
 		route, err := g.catalog.Route(model, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous)
@@ -442,7 +455,7 @@ func (g *Gateway) handleInference(external wire.Protocol) http.HandlerFunc {
 				}
 				relayBody = rewritten
 			}
-			g.forwardSystemOne(w, r, relayBody, payload, model, route)
+			g.forwardSystemOne(w, r, relayBody, payload, model, requested, route)
 			return
 		}
 		bodies, err := g.prepareRouteBodies(external, route, payload)
@@ -603,27 +616,53 @@ func (g *Gateway) handleSystemOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model := jsonutil.StringAt(payload, "model")
-	if meta := telemetry.MetaFromRequest(r); meta != nil {
+	meta := telemetry.MetaFromRequest(r)
+	if meta != nil {
 		meta.Model = model
 	}
 	if model == "" {
 		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, "model is required", "invalid_request_error", "model")
 		return
 	}
+	// A decision relay is metered like the message endpoints, so it settles
+	// through the same path: without this, its tokens never reach the key's
+	// daily budget and its spend is reported as zero.
+	defer g.finishRequest(r)
+	requested := model
+	if target := g.cfg.ResolveModel(model); target != model {
+		rewritten, rewriteErr := rewriteModelBody(body, target)
+		if rewriteErr != nil {
+			wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, rewriteErr.Error(), "invalid_request_error", "model")
+			return
+		}
+		model, body = target, rewritten
+		payload["model"] = target
+		if meta != nil {
+			meta.ModelAlias = requested
+			meta.Model = target
+		}
+	}
+	// The key's model policy applies here exactly as it does on the message
+	// endpoints; this route used to reach any System One model with any key.
+	if !g.cfg.ServerKeyAllowsRequest(callerScope(r.Context()), requested, model) {
+		g.limiter.Release(callerScope(r.Context()))
+		wire.WriteError(w, wire.SystemOne, http.StatusForbidden, fmt.Sprintf("model %q is not allowed for this API key", requested), "permission_error", "model")
+		return
+	}
 	if !g.catalog.Supported(model) {
-		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, "the model uses an upstream protocol that opencode2api does not expose", "invalid_request_error", "model")
+		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, g.unavailableMessage(requested, model), "invalid_request_error", "model")
 		return
 	}
 	route, err := g.catalog.Route(model, len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous)
 	if err != nil {
-		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, err.Error(), "invalid_request_error", "model")
+		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, aliasRouteError(requested, model, err.Error()), "invalid_request_error", "model")
 		return
 	}
 	if route.Protocol != wire.SystemOne {
-		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, fmt.Sprintf("the model does not use the %s protocol", wire.SystemOne), "invalid_request_error", "model")
+		wire.WriteError(w, wire.SystemOne, http.StatusBadRequest, aliasRouteError(requested, model, fmt.Sprintf("the model does not use the %s protocol", wire.SystemOne)), "invalid_request_error", "model")
 		return
 	}
-	g.forwardSystemOne(w, r, body, payload, model, route)
+	g.forwardSystemOne(w, r, body, payload, model, requested, route)
 }
 
 // forwardSystemOne relays a System One decision payload verbatim to the
@@ -631,7 +670,7 @@ func (g *Gateway) handleSystemOne(w http.ResponseWriter, r *http.Request) {
 // The payload pairs a free-form state with typed questions, which no
 // message-shaped upstream protocol accepts, so it is never translated. Answers
 // are non-streaming today; a streaming upstream reply is still relayed.
-func (g *Gateway) forwardSystemOne(w http.ResponseWriter, r *http.Request, body []byte, payload map[string]any, model string, route models.Route) {
+func (g *Gateway) forwardSystemOne(w http.ResponseWriter, r *http.Request, body []byte, payload map[string]any, model, requested string, route models.Route) {
 	meta := telemetry.MetaFromRequest(r)
 	if meta != nil {
 		meta.Model = model
@@ -685,6 +724,9 @@ func (g *Gateway) forwardSystemOne(w http.ResponseWriter, r *http.Request, body 
 		meta.Protocol = upstreamRoute.Protocol
 	}
 	w.Header().Set("x-request-id", ids.Request)
+	if requested != model {
+		w.Header().Set("X-Resolved-Model", model)
+	}
 	if resp.StatusCode/100 != 2 {
 		copyErrorResponse(w, wire.SystemOne, resp, ids.Request)
 		return

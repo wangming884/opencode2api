@@ -559,6 +559,16 @@ func (c *ModelCatalog) Supported(model string) bool {
 	return c.supportedLocked(model)
 }
 
+// Known reports whether some tier advertises model, whether or not its native
+// protocol can be served. It separates "never heard of this ID" from "knows it
+// and cannot speak its protocol", which are different answers for a caller
+// trying to find a typo.
+func (c *ModelCatalog) Known(model string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.zen[model] || c.goModels[model]
+}
+
 // MetadataForTier returns the rich per-model metadata (context window,
 // reasoning, tool call, modalities) captured from the OpenCode capability
 // catalog for the tier that will actually serve the request. Same-named models
