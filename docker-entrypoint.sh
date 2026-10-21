@@ -31,7 +31,15 @@ seed_container_listen() {
 
 if [ ! -f "$config_path" ]; then
     mkdir -p "$(dirname "$config_path")"
-    if [ -n "$config_seed_path" ] && [ -f "$config_seed_path" ]; then
+    if [ -n "${CONFIG_JSON:-}" ]; then
+        # A platform that cannot mount a volume has nowhere to keep the file:
+        # it is recreated on every restart and everything configured in the
+        # console disappears with it. CONFIG_JSON supplies the baseline from
+        # the environment, which such platforms do persist.
+        printf '%s\n' "$CONFIG_JSON" > "$config_path"
+        seed_container_listen "$config_path"
+        printf '%s\n' "Initialized $config_path from CONFIG_JSON."
+    elif [ -n "$config_seed_path" ] && [ -f "$config_seed_path" ]; then
         cp "$config_seed_path" "$config_path"
         seed_container_listen "$config_path"
         printf '%s\n' "Initialized $config_path from $config_seed_path."
@@ -40,7 +48,11 @@ if [ ! -f "$config_path" ]; then
         seed_container_listen "$config_path"
         printf '%s\n' \
             "config.json not found; created $config_path. Set API keys or enable anonymous mode, and change the WebUI password before use."
+        printf '%s\n' \
+            "This file is the only copy of your settings: keep $state_dir on a persistent volume, or set CONFIG_JSON, or they are lost on the next restart."
     fi
+else
+    printf '%s\n' "Using the existing $config_path."
 fi
 
 set -- /usr/local/bin/opencode2api -config "$config_path"

@@ -35,8 +35,11 @@ LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 # LISTEN_ADDRESS / WEBUI_LISTEN_ADDRESS are intentionally unset: config.json is
 # authoritative. Export them to override the configured listen addresses.
+# CONFIG_JSON seeds config.json when it does not exist yet, which is the only
+# durable option on a platform that cannot mount a volume.
 ENV CONFIG_PATH=/var/lib/opencode2api/config.json \
     CONFIG_SEED_PATH= \
+    CONFIG_JSON= \
     LISTEN_ADDRESS= \
     WEBUI_LISTEN_ADDRESS= \
     STATE_DIR=/var/lib/opencode2api

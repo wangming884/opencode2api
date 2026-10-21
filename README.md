@@ -108,6 +108,23 @@ docker run -d --name opencode2api \
 
 A `proxyfile` used in Docker must also be available inside the container at the configured path.
 
+### Platforms without a persistent volume
+
+The container keeps everything that must outlive a request in `STATE_DIR` (`/var/lib/opencode2api`): `config.json`, its backup, and the model and price caches. When that directory starts empty, the entrypoint seeds `config.json` from `config.example.json` and says so:
+
+```
+config.json not found; created /var/lib/opencode2api/config.json.
+```
+
+If that line appears on **every** restart or redeploy, the platform is recreating the container from the image and the filesystem is not persistent. Every setting made in the console — keys, the WebUI password, `models.aliases`, `models.hidden` — is gone, and the service comes back with the example configuration. Symptoms look like a bug: a model that was hidden reappears, a mapping stops applying, the WebUI asks for first-time setup again.
+
+Two ways to fix it, in order of preference:
+
+1. **Mount a persistent volume at `STATE_DIR`.** This is the only option where changes made in the console survive a restart.
+2. **Set `CONFIG_JSON` to the full configuration document.** It seeds `config.json` when the file does not exist, so the service starts from a known state even on a platform that only offers environment variables. The value is only read when the file is absent, so console edits still work for the life of the container, but they are lost on the next restart and the environment value is what comes back. Delete the file to re-seed from it.
+
+`CONFIG_JSON` takes the same document as `config.json`; the entrypoint still rewrites a `127.0.0.1:8080` API listen to `0.0.0.0:8080` so published ports can reach it.
+
 ## API usage
 
 `server_keys` authenticate clients to this gateway. They are separate from `zen_keys` and `go_keys` and are never used as upstream credentials.
