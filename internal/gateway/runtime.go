@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -491,21 +492,75 @@ func (m *RuntimeController) Resources() ResourceSnapshot {
 	return result
 }
 
+// DebugModel is one row of the console's routing table: the catalog's
+// diagnostic for the model, plus the two facts that come from configuration
+// rather than the catalog. The console shows the whole catalog on purpose, so
+// without these two fields a model that /v1/models hides looks available.
+type DebugModel struct {
+	modelcatalog.RouteDiagnostic
+	// Hidden marks a model models.hidden keeps out of /v1/models. It is still
+	// routable: hiding is a discovery filter, not a policy.
+	Hidden bool `json:"hidden,omitempty"`
+	// AliasOf is the model a public name resolves to. The row then describes
+	// the public name, with the routing of the model behind it.
+	AliasOf string `json:"alias_of,omitempty"`
+}
+
 // DebugModels returns a routing diagnostic for every catalog model, with no
-// requested protocol, plus the catalog's metadata snapshot.
-func (m *RuntimeController) DebugModels() ([]modelcatalog.RouteDiagnostic, modelcatalog.MetadataSnapshot) {
+// requested protocol, plus one row per alias whose public name is not itself a
+// catalog model, plus the catalog's metadata snapshot.
+func (m *RuntimeController) DebugModels() ([]DebugModel, modelcatalog.MetadataSnapshot) {
 	runtime := m.current.Load()
 	if runtime == nil {
 		return nil, modelcatalog.MetadataSnapshot{}
 	}
 	gateway := runtime.gateway
 	models := gateway.catalog.List()
-	result := make([]modelcatalog.RouteDiagnostic, 0, len(models))
+	result := make([]DebugModel, 0, len(models)+len(gateway.cfg.Models.Aliases))
+	seen := make(map[string]bool, len(models))
 	for _, model := range models {
-		result = append(result, gateway.catalog.Diagnostic(model, "", len(gateway.cfg.ZenKeys) > 0, len(gateway.cfg.GoKeys) > 0, gateway.cfg.Anonymous))
+		seen[model] = true
+		// A catalog model can also be an alias key, in which case the row has
+		// to describe where it actually goes, not what the catalog says.
+		aliasOf := ""
+		if target := gateway.cfg.ResolveModel(model); target != model {
+			aliasOf = target
+		}
+		result = append(result, gateway.debugModel(model, aliasOf))
+	}
+	names := make([]string, 0, len(gateway.cfg.Models.Aliases))
+	for name := range gateway.cfg.Models.Aliases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		if target := gateway.cfg.ResolveModel(name); target != name {
+			result = append(result, gateway.debugModel(name, target))
+		}
 	}
 	metadata := gateway.catalog.MetadataSnapshot()
 	return result, metadata
+}
+
+// debugModel builds one routing-table row. name is the ID a client would send;
+// aliasOf, when set, is the model that actually serves it.
+func (g *Gateway) debugModel(name, aliasOf string) DebugModel {
+	target := name
+	if aliasOf != "" {
+		target = aliasOf
+	}
+	row := DebugModel{
+		RouteDiagnostic: g.catalog.Diagnostic(target, "", len(g.cfg.ZenKeys) > 0, len(g.cfg.GoKeys) > 0, g.cfg.Anonymous),
+		Hidden:          g.cfg.Models.Hides(name),
+	}
+	if aliasOf != "" {
+		row.Model = name
+		row.AliasOf = aliasOf
+	}
+	return row
 }
 
 // DebugRoute reports how the current runtime would route a request for model

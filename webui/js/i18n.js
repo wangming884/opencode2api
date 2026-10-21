@@ -504,6 +504,7 @@ const DICTIONARY = {
       "diag.noRequests": "No requests have been routed",
       "diag.noAttempts": "No upstream attempts",
       "diag.noMatch": "No matching models",
+      "diag.hidden": "Hidden from /v1/models",
 
       "quotas.noKey": "No Go Key configured",
       "quotas.addKeyFirst": "Add an OpenCode Go Key in the Configuration center first.",
@@ -1099,6 +1100,7 @@ const DICTIONARY = {
       "diag.noRequests": "Chưa có request nào được định tuyến",
       "diag.noAttempts": "Chưa có lần thử upstream",
       "diag.noMatch": "Không có mô hình phù hợp",
+      "diag.hidden": "Ẩn khỏi /v1/models",
 
       "quotas.noKey": "Chưa cấu hình Go Key",
       "quotas.addKeyFirst": "Hãy thêm OpenCode Go Key trong Trung tâm cấu hình trước.",

@@ -269,6 +269,15 @@ textarea {
   color: var(--bad);
 }
 
+/* A note appended to a model ID in the routing table: the public name a row is
+   reached under, or the fact that /v1/models leaves it out. */
+.model-note {
+  margin-left: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

@@ -260,9 +260,19 @@ function renderRouteModels() {
     .forEach((item) => {
       const eligibility = item.anonymous_eligibility || {};
       const plan = [...(item.anonymous ? ["anonymous"] : []), ...(item.key_tiers || [])];
+      // The table lists the whole catalog, so it has to say when a row is not
+      // what a client sees: a hidden model is routable but absent from
+      // /v1/models, and an alias row is a public name pointing at another.
+      const name = el("td", { class: "mono" }, [el("span", { text: item.model })]);
+      if (item.alias_of) {
+        name.append(el("span", { class: "model-note", text: `→ ${item.alias_of}` }));
+      }
+      if (item.hidden) {
+        name.append(el("span", { class: "model-note", text: t("已隐藏，客户端看不到", "diag.hidden") }));
+      }
       host.append(
         el("tr", {}, [
-          el("td", { class: "mono", text: item.model }),
+          name,
           el("td", { text: `${item.native_protocol} · ${item.protocol_source}` }),
           el("td", {
             class: item.route_error ? "bad" : "",
